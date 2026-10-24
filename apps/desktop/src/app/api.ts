@@ -24,6 +24,20 @@ export interface WorkRow {
   authors: string[];
   hasCover: boolean;
   files: FileRow[];
+  /** 最近阅读时间（毫秒；null=未读） */
+  lastReadAt: number | null;
+}
+
+/** 相对时间：刚刚 / N 分钟前 / N 小时前 / N 天前 / 日期 */
+export function relTime(ts: number | null): string {
+  if (!ts) return "";
+  const diff = Date.now() - ts;
+  if (diff < 60_000) return "刚刚";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
+  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)} 天前`;
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 export interface ImportedFile {
@@ -128,6 +142,7 @@ const mockWork: WorkRow = {
   title: "演示之书（浏览器 mock）",
   authors: ["BookVault"],
   hasCover: false,
+  lastReadAt: Date.now() - 42 * 60_000,
   files: [
     {
       id: "mock-f1",

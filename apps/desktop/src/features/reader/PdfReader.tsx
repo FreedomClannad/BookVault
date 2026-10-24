@@ -90,7 +90,7 @@ export function PdfReader({ fileId, pages, toc, initial, onProgress }: Props) {
 
   if (error) {
     return (
-      <div className="reader-error">
+      <div className="mx-auto flex max-w-[420px] flex-1 flex-col items-center justify-center gap-3.5 px-8 text-center leading-relaxed text-danger">
         <div>PDF 渲染失败: {error}</div>
       </div>
     );
@@ -98,20 +98,30 @@ export function PdfReader({ fileId, pages, toc, initial, onProgress }: Props) {
 
   return (
     <>
-      <div className="reader-toolbar">
-        <button onClick={() => go(-1)}>←</button>
-        <span className="book-meta">
+      <div className="flex flex-none items-center gap-2 border-b border-line bg-paper-raised px-5 py-2.5">
+        <button className="btn" onClick={() => go(-1)}>
+          ←
+        </button>
+        <span className="ml-auto whitespace-nowrap text-xs text-muted">
           {pageNum + 1}/{pages}
         </span>
-        <button onClick={() => go(1)}>→</button>
-        <button onClick={() => setScale((s) => Math.max(0.5, s - 0.2))}>-</button>
-        <span className="book-meta">{Math.round(scale * 100)}%</span>
-        <button onClick={() => setScale((s) => Math.min(4, s + 0.2))}>+</button>
+        <button className="btn" onClick={() => go(1)}>
+          →
+        </button>
+        <button className="btn" onClick={() => setScale((s) => Math.max(0.5, s - 0.2))}>
+          -
+        </button>
+        <span className="ml-auto whitespace-nowrap text-xs text-muted">
+          {Math.round(scale * 100)}%
+        </span>
+        <button className="btn" onClick={() => setScale((s) => Math.min(4, s + 0.2))}>
+          +
+        </button>
         {toc.length > 0 && (
           <select
             onChange={(e) => setPageNum(Number(e.target.value) - 1)}
             value={pageNum + 1}
-            style={{ font: "inherit" }}
+            className="input"
           >
             {toc.map((t, i) => (
               <option key={i} value={t.page}>
@@ -121,7 +131,7 @@ export function PdfReader({ fileId, pages, toc, initial, onProgress }: Props) {
           </select>
         )}
       </div>
-      <div className="pdf-canvas-wrap">
+      <div className="flex flex-1 justify-center overflow-auto bg-reading">
         <canvas ref={canvasRef} />
       </div>
     </>

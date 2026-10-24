@@ -58,11 +58,13 @@ export function Reader({ fileId, onExit }: Props) {
 
   if (error) {
     return (
-      <div className="reader">
-        <div className="reader-toolbar">
-          <button onClick={onExit}>← 返回</button>
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex flex-none items-center gap-2 border-b border-line bg-paper-raised px-5 py-2.5">
+          <button className="btn btn-ghost" onClick={onExit}>
+            ← 返回
+          </button>
         </div>
-        <div className="reader-error">
+        <div className="mx-auto flex max-w-[420px] flex-1 flex-col items-center justify-center gap-3.5 px-8 text-center leading-relaxed text-danger">
           <div>{error}</div>
           <button onClick={onExit}>返回书架</button>
         </div>
@@ -72,10 +74,12 @@ export function Reader({ fileId, onExit }: Props) {
 
   if (!opened) {
     return (
-      <div className="reader">
-        <div className="reader-toolbar">
-          <button onClick={onExit}>← 返回</button>
-          <span className="reader-title">正在打开…</span>
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex flex-none items-center gap-2 border-b border-line bg-paper-raised px-5 py-2.5">
+          <button className="btn btn-ghost" onClick={onExit}>
+            ← 返回
+          </button>
+          <span className="mx-1 truncate font-display text-base font-semibold">正在打开…</span>
         </div>
       </div>
     );
@@ -121,21 +125,27 @@ export function Reader({ fileId, onExit }: Props) {
   })();
 
   return (
-    <div className="reader">
-      <div className="reader-toolbar">
-        <button onClick={onExit}>← 返回</button>
-        <span className="reader-title">{opened.book.metadata.title ?? opened.file.name}</span>
-        <span className="book-meta">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex flex-none items-center gap-2 border-b border-line bg-paper-raised px-5 py-2.5">
+        <button className="btn btn-ghost" onClick={onExit}>
+          ← 返回
+        </button>
+        <span className="mx-1 truncate font-display text-base font-semibold">
+          {opened.book.metadata.title ?? opened.file.name}
+        </span>
+        <span className="ml-auto whitespace-nowrap text-xs text-muted">
           {opened.book.parser.parser} v{opened.book.parser.version}
         </span>
       </div>
 
       {showDrift && (
-        <div className="hash-drift-banner">
+        <div className="flex flex-none items-center gap-3.5 border-b border-line bg-accent-weak px-5 py-[9px] text-[13px] text-accent-strong">
           ⚠ 文件内容已变更，旧进度的定位可能不准确
-          <button onClick={() => setDriftDismissed(true)}>仍使用旧进度</button>
+          <button className="btn" onClick={() => setDriftDismissed(true)}>
+            仍使用旧进度
+          </button>
           <button
-            className="primary"
+            className="btn btn-primary"
             onClick={() => {
               // 重置：以空进度打开（渲染器 initial 置 null 后不会跳转）
               setOpened({ ...opened, progress: [] });
@@ -147,7 +157,7 @@ export function Reader({ fileId, onExit }: Props) {
         </div>
       )}
 
-      <div className="reader-body">{body}</div>
+      <div className="flex min-h-0 flex-1">{body}</div>
     </div>
   );
 }

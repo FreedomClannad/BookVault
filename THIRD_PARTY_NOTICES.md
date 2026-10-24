@@ -33,14 +33,15 @@
 
 ## npm（直接依赖）
 
-| 包                                         | 许可证            | 说明                            |
-| ------------------------------------------ | ----------------- | ------------------------------- |
-| react / react-dom                          | MIT               | UI                              |
-| @tauri-apps/api、@tauri-apps/plugin-dialog | MIT OR Apache-2.0 | IPC / 文件选择                  |
-| pdfjs-dist                                 | Apache-2.0        | PDF 渲染                        |
-| fflate                                     | MIT               | CBZ 按需解压（渲染期，M2 备用） |
-| typescript                                 | Apache-2.0        | 构建                            |
-| vite / vitest / eslint 系 / prettier       | MIT 系            | 工具链                          |
+| 包                                         | 许可证            | 说明                             |
+| ------------------------------------------ | ----------------- | -------------------------------- |
+| react / react-dom                          | MIT               | UI                               |
+| @tauri-apps/api、@tauri-apps/plugin-dialog | MIT OR Apache-2.0 | IPC / 文件选择                   |
+| pdfjs-dist                                 | Apache-2.0        | PDF 渲染                         |
+| fflate                                     | MIT               | CBZ 按需解压（渲染期，M2 备用）  |
+| typescript                                 | Apache-2.0        | 构建                             |
+| vite / vitest / eslint 系 / prettier       | MIT 系            | 工具链                           |
+| tailwindcss / @tailwindcss/vite            | MIT               | 样式（v4 @theme 令牌 + utility） |
 
 ## 三方 skills（.agents/skills/，随仓库分发）
 

@@ -143,8 +143,12 @@ export function EpubReader({ fileId, chapters, initial, onProgress }: Props) {
 
   return (
     <>
-      <div className="reader-toolbar">
-        <button disabled={idx <= 0} onClick={() => idx > 0 && switchChapter(chapters[idx - 1].id)}>
+      <div className="flex flex-none items-center gap-2 border-b border-line bg-paper-raised px-5 py-2.5">
+        <button
+          className="btn"
+          disabled={idx <= 0}
+          onClick={() => idx > 0 && switchChapter(chapters[idx - 1].id)}
+        >
           ← 上一章
         </button>
         <button
@@ -153,26 +157,26 @@ export function EpubReader({ fileId, chapters, initial, onProgress }: Props) {
         >
           下一章 →
         </button>
-        <span className="book-meta">
+        <span className="ml-auto whitespace-nowrap text-xs text-muted">
           {idx + 1}/{chapters.length} {chapter?.title ?? ""}
         </span>
       </div>
-      <div className="reader-body">
-        <div className="chapter-list">
+      <div className="flex min-h-0 flex-1">
+        <div className="w-[236px] flex-none overflow-auto border-r border-line bg-paper p-2.5">
           {chapters.map((c) => (
             <button
               key={c.id}
-              className={`chapter-item ${c.id === currentId ? "active" : ""}`}
+              className={`block w-full truncate rounded-r-md border-l-2 border-l-transparent py-2 pl-3 pr-3 text-left text-[13px] text-muted hover:border-l-line hover:bg-paper-raised hover:text-fg ${c.id === currentId ? "border-l-seal bg-paper-raised font-medium text-accent-strong" : ""}`}
               onClick={() => switchChapter(c.id)}
             >
               {c.title ?? c.id}
             </button>
           ))}
         </div>
-        <div className="reading-pane">
+        <div className="flex-1 overflow-auto bg-reading text-reading-fg">
           <iframe
             ref={frameRef}
-            className="epub-frame"
+            className="h-full w-full border-none bg-reading"
             title="epub"
             srcDoc={doc}
             sandbox="allow-same-origin"

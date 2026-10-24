@@ -83,8 +83,15 @@ export function TxtReader({ fileId, chapters, initial, onProgress }: Props) {
 
   return (
     <>
-      <div className="reader-toolbar" style={{ flex: "0 0 auto" }}>
-        <button disabled={idx <= 0} onClick={() => idx > 0 && switchChapter(chapters[idx - 1].id)}>
+      <div
+        className="flex flex-none items-center gap-2 border-b border-line bg-paper-raised px-5 py-2.5"
+        style={{ flex: "0 0 auto" }}
+      >
+        <button
+          className="btn"
+          disabled={idx <= 0}
+          onClick={() => idx > 0 && switchChapter(chapters[idx - 1].id)}
+        >
           ← 上一章
         </button>
         <button
@@ -93,27 +100,35 @@ export function TxtReader({ fileId, chapters, initial, onProgress }: Props) {
         >
           下一章 →
         </button>
-        <button onClick={() => changeFont(Math.max(14, fontSize - 2))}>A-</button>
-        <button onClick={() => changeFont(Math.min(28, fontSize + 2))}>A+</button>
-        <span className="book-meta">
+        <button className="btn" onClick={() => changeFont(Math.max(14, fontSize - 2))}>
+          A-
+        </button>
+        <button className="btn" onClick={() => changeFont(Math.min(28, fontSize + 2))}>
+          A+
+        </button>
+        <span className="ml-auto whitespace-nowrap text-xs text-muted">
           {idx + 1}/{chapters.length} {chapters[idx]?.title ?? ""}
         </span>
       </div>
-      <div className="reader-body">
-        <div className="chapter-list">
+      <div className="flex min-h-0 flex-1">
+        <div className="w-[236px] flex-none overflow-auto border-r border-line bg-paper p-2.5">
           {chapters.map((c) => (
             <button
               key={c.id}
-              className={`chapter-item ${c.id === currentId ? "active" : ""}`}
+              className={`block w-full truncate rounded-r-md border-l-2 border-l-transparent py-2 pl-3 pr-3 text-left text-[13px] text-muted hover:border-l-line hover:bg-paper-raised hover:text-fg ${c.id === currentId ? "border-l-seal bg-paper-raised font-medium text-accent-strong" : ""}`}
               onClick={() => switchChapter(c.id)}
             >
               {c.title ?? c.id}
             </button>
           ))}
         </div>
-        <div className="reading-pane" ref={paneRef} onScroll={reportScroll}>
+        <div
+          className="flex-1 overflow-auto bg-reading text-reading-fg"
+          ref={paneRef}
+          onScroll={reportScroll}
+        >
           <div
-            className="txt-content"
+            className="mx-auto max-w-[40em] whitespace-pre-wrap px-7 pb-[120px] pt-10 text-justify first-letter:font-display first-letter:text-[1.9em] first-letter:leading-none first-letter:text-accent-strong"
             style={{ ["--reader-font-size" as string]: `${fontSize}px` }}
           >
             {text}

@@ -90,30 +90,51 @@ export function ComicReader({ fileId, pages, initial, onProgress }: Props) {
 
   return (
     <>
-      <div className="reader-toolbar">
-        <button onClick={() => go(-1)}>←</button>
-        <button onClick={() => go(1)}>→</button>
-        <span className="book-meta">
+      <div className="flex flex-none items-center gap-2 border-b border-line bg-paper-raised px-5 py-2.5">
+        <button className="btn" onClick={() => go(-1)}>
+          ←
+        </button>
+        <button className="btn" onClick={() => go(1)}>
+          →
+        </button>
+        <span className="ml-auto whitespace-nowrap text-xs text-muted">
           {idx + 1}/{pages.length}
         </span>
-        <button onClick={() => setMode(mode === "page" ? "scroll" : "page")}>
+        <button className="btn" onClick={() => setMode(mode === "page" ? "scroll" : "page")}>
           {mode === "page" ? "切到条漫滚动" : "切到单页翻页"}
         </button>
-        <button onClick={() => changeFit("fit-width")}>适宽</button>
-        <button onClick={() => changeFit("fit-height")}>适高</button>
-        <button onClick={() => changeFit("original")}>原始</button>
+        <button className="btn" onClick={() => changeFit("fit-width")}>
+          适宽
+        </button>
+        <button className="btn" onClick={() => changeFit("fit-height")}>
+          适高
+        </button>
+        <button className="btn" onClick={() => changeFit("original")}>
+          原始
+        </button>
       </div>
-      <div className={`comic-stage ${fit}`}>
+      <div
+        className={`flex flex-1 items-center justify-center overflow-auto bg-reading ${fit === "fit-width" ? "[&_img]:w-full [&_img]:h-auto" : fit === "fit-height" ? "[&_img]:h-full [&_img]:w-auto" : ""}`}
+      >
         {mode === "page" ? (
           urls.get(idx) ? (
-            <img src={urls.get(idx)} alt={`第 ${idx + 1} 页`} />
+            <img src={urls.get(idx)} alt={`第 ${idx + 1} 页`} className="max-w-full shadow-1" />
           ) : (
-            <span className="comic-loading">加载中… {current ? locatorKey(current) : ""}</span>
+            <span className="text-[13px] text-muted">
+              加载中… {current ? locatorKey(current) : ""}
+            </span>
           )
         ) : (
           <div>
             {pages.map((_, i) =>
-              urls.get(i) ? <img key={i} src={urls.get(i)} alt={`第 ${i + 1} 页`} /> : null,
+              urls.get(i) ? (
+                <img
+                  key={i}
+                  src={urls.get(i)}
+                  alt={`第 ${i + 1} 页`}
+                  className="mx-auto max-w-full shadow-1"
+                />
+              ) : null,
             )}
           </div>
         )}

@@ -39,6 +39,8 @@ pub struct WorkRow {
     pub authors: Vec<String>,
     pub has_cover: bool,
     pub files: Vec<FileRow>,
+    /// 最近阅读时间（毫秒；None=未读）
+    pub last_read_at: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -91,17 +93,27 @@ fn import_paths(app: tauri::AppHandle, paths: Vec<String>) -> Result<Vec<Importe
 fn list_works(app: tauri::AppHandle) -> Result<Vec<WorkRow>, String> {
     let st = state(&app);
     let conn = st.db.lock().map_err(|e| e.to_string())?;
-    let mut works: Vec<(String, String, String, String)> = {
+    let mut works: Vec<(String, String, String, String, Option<i64>)> = {
         let mut stmt = conn
-            .prepare("SELECT id, title, authors, COALESCE(cover_file, '') FROM works ORDER BY updated_at DESC")
+            .prepare(
+                "SELECT w.id, w.title, w.authors, COALESCE(w.cover_file, ''), \
+                 (SELECT MAX(rp.updated_at) FROM reading_progress rp \
+                  JOIN book_files bf ON bf.id = rp.book_file_id \
+                  JOIN editions e2 ON e2.id = bf.edition_id \
+                  WHERE e2.work_id = w.id) AS last_read \
+                 FROM works w \
+                 ORDER BY (last_read IS NULL), last_read DESC, w.updated_at DESC",
+            )
             .map_err(|e| e.to_string())?;
-        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?
+        stmt.query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?
     };
     let mut out = Vec::with_capacity(works.len());
-    for (id, title, authors_json, cover) in works.drain(..) {
+    for (id, title, authors_json, cover, last_read_at) in works.drain(..) {
         let files: Vec<FileRow> = {
             let mut stmt = conn
                 .prepare(
@@ -134,6 +146,7 @@ fn list_works(app: tauri::AppHandle) -> Result<Vec<WorkRow>, String> {
             authors: serde_json::from_str(&authors_json).unwrap_or_default(),
             has_cover: !cover.is_empty(),
             files,
+            last_read_at,
         });
     }
     Ok(out)
