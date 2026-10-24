@@ -1,0 +1,15 @@
+[package]
+name = "bv-protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "BookVault /api/v1 DTOs; field-aligned with packages/shared (plan section 2.3)"
+
+[dependencies]
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

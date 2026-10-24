@@ -1,0 +1,9 @@
+node_modules
+dist
+target
+coverage
+samples
+pnpm-lock.yaml
+.agents
+*.jpeg
+*.png

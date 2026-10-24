@@ -1,0 +1,33 @@
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+
+# Rust
+target/
+**/*.rs.bk
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+.pnpm-store/
+
+# 测试样本：全部由 scripts/gen-samples.py 重建，不入库（见 samples/README.md）
+samples/**
+!samples/README.md
+
+# Tauri 生成物
+apps/desktop/src-tauri/gen/
+
+# 环境变量与密钥（绝不提交）
+.env
+.env.*
+!.env.example
+
+# 覆盖率与本地缓存
+coverage/
+*.log

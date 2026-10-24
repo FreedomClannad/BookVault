@@ -1,0 +1,12 @@
+[package]
+name = "bv-formats"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "BookVault format detection and parsing layer (EPUB/TXT/PDF/CBZ/image dirs)"
+
+[dependencies]
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
