@@ -6,7 +6,16 @@ rust-version.workspace = true
 description = "BookVault format detection and parsing layer (EPUB/TXT/PDF/CBZ/image dirs)"
 
 [dependencies]
+chardetng = "1.0.0"
+encoding_rs = "0.8.42"
+lopdf = "0.46.0"
+quick-xml = "0.42.0"
+sha2 = "0.11.1"
 thiserror = { workspace = true }
+zip = { version = "=9.0.5", default-features = false, features = ["deflate"] }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"

@@ -138,6 +138,60 @@ def write_cbz(path: Path, names: list[str]) -> None:
             zf.writestr(name, make_png(32, 48, color))
 
 
+# ---------- PDF（手工构造的最小合法 PDF：3 页 + Info 标题 + 2 个书签） ----------
+
+def make_pdf(title: str, page_texts: list[str], bookmarks: list[tuple[str, int]]) -> bytes:
+    n = len(page_texts)
+    page_ids = list(range(4, 4 + n))
+    content_ids = list(range(4 + n, 4 + 2 * n))
+    next_id = 4 + 2 * n
+    outline_ids = list(range(next_id, next_id + len(bookmarks))) if bookmarks else []
+    next_id += len(bookmarks)
+    info_id = next_id
+
+    objs: dict[int, bytes] = {}
+    kids = " ".join(f"{i} 0 R" for i in page_ids)
+    objs[2] = f"<< /Type /Pages /Kids [{kids}] /Count {n} >>".encode()
+    if bookmarks:
+        objs[3] = (
+            f"<< /Type /Outlines /First {outline_ids[0]} 0 R /Last {outline_ids[-1]} 0 R >>"
+        ).encode()
+        objs[1] = b"<< /Type /Catalog /Pages 2 0 R /Outlines 3 0 R >>"
+        for k, (bt, pageno) in enumerate(bookmarks):
+            prev = f"/Prev {outline_ids[k - 1]} 0 R " if k > 0 else ""
+            nxt = f"/Next {outline_ids[k + 1]} 0 R " if k < len(bookmarks) - 1 else ""
+            objs[outline_ids[k]] = (
+                f"<< /Title ({bt}) /Parent 3 0 R {prev}{nxt}"
+                f"/Dest [{page_ids[pageno]} 0 R /XYZ null null null] >>"
+            ).encode()
+    else:
+        objs[1] = b"<< /Type /Catalog /Pages 2 0 R >>"
+    for i, pid in enumerate(page_ids):
+        objs[pid] = (
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            f"/Contents {content_ids[i]} 0 R >>"
+        ).encode()
+        stream = f"BT /F1 24 Tf 72 700 Td ({page_texts[i]}) Tj ET".encode()
+        objs[content_ids[i]] = b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream"
+    objs[info_id] = f"<< /Title ({title}) /Producer (gen-samples) >>".encode()
+
+    out = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    offsets: dict[int, int] = {}
+    for num in sorted(objs):
+        offsets[num] = len(out)
+        out.extend(f"{num} 0 obj\n".encode() + objs[num] + b"\nendobj\n")
+    xref_pos = len(out)
+    size = max(objs) + 1
+    out.extend(f"xref\n0 {size}\n".encode() + b"0000000000 65535 f \n")
+    for num in range(1, size):
+        off = offsets.get(num)
+        out.extend((f"{off:010d} 00000 n \n" if off is not None else "0000000000 65535 f \n").encode())
+    out.extend(
+        f"trailer\n<< /Size {size} /Root 1 0 R /Info {info_id} 0 R >>\nstartxref\n{xref_pos}\n%%EOF".encode()
+    )
+    return bytes(out)
+
+
 # ---------- 恶意样本（仅供 M1 安全测试，勿用阅读器打开） ----------
 
 def write_malicious() -> None:
@@ -183,6 +237,17 @@ def main() -> None:
     epub.mkdir(parents=True, exist_ok=True)
     write_epub(epub / "minimal-epub3.epub", epub3=True)
     write_epub(epub / "ncx-only-epub2.epub", epub3=False)
+
+    # PDF（3 页 + Info 标题 + 书签；书签标题用 ASCII，避开 PDF 文本串编码差异）
+    pdf = SAMPLES / "pdf"
+    pdf.mkdir(parents=True, exist_ok=True)
+    (pdf / "text-bookmarks.pdf").write_bytes(
+        make_pdf(
+            "Sample PDF Document",
+            ["Page one", "Page two", "Page three"],
+            [("Chapter 1", 0), ("Chapter 2", 1)],
+        )
+    )
 
     write_malicious()
 

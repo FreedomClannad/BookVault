@@ -16,6 +16,7 @@
 | `cbz/sort-trap.cbz`（page1/page10/page2…） | 自然排序陷阱（字典序错误顺序） |
 | `epub/minimal-epub3.epub` | EPUB3：OPF + nav 目录 |
 | `epub/ncx-only-epub2.epub` | EPUB2：NCX 目录回退 |
+| `pdf/text-bookmarks.pdf` | PDF：3 页 + Info 标题 + 2 书签（脚本手工构造，书签用 ASCII 规避编码差异） |
 | `malicious/traversal.cbz` | ZIP Slip 路径穿越（必须被拒绝） |
 | `malicious/bomb.cbz` | 压缩炸弹 256MB 解压上限（必须被拒绝） |
 
@@ -24,5 +25,5 @@
 ## 尚缺的真实样本（等负责人提供，M1 前最佳）
 
 - 残缺 OPF / 无 nav 的真实 EPUB、带字体与 CSS 的复杂 EPUB
-- >50MB 长篇 TXT（脚本可生成，见 M1.4 流式用例）
-- 文本型带书签 PDF、扫描型 PDF（P1）
+- >50MB 长篇 TXT（集成测试中动态生成 330MB 用例，不落盘 samples/）
+- 文本型带书签真实 PDF（当前为脚本构造样本）、扫描型 PDF（P1）

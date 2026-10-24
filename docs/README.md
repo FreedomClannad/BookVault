@@ -12,14 +12,14 @@
 | [requirements/BOOKVAULT_AI_PROJECT_BRIEF.md](requirements/BOOKVAULT_AI_PROJECT_BRIEF.md) | ✅ 权威    | 产品需求与架构约定（项目最高优先级文档，2026-10-24 由根目录移入）                                                            |
 | [plans/phase-1-implementation-plan.md](plans/phase-1-implementation-plan.md)             | ✅ 已确认  | Phase 1 技术选型、目录结构、解析库许可证核实、Work–Edition–BookFile 三层领域模型、里程碑 M0–M4 与验收标准（决策记录见其 §9） |
 | [standards/AI_DEV_PROCESS.md](standards/AI_DEV_PROCESS.md)                               | ✅ 已采纳  | AI 开发流程规范调研（AGENTS.md 开放标准、spec-first、skills）与本仓库执行流程                                                |
+| [formats/README.md](formats/README.md)                                                   | ✅ M1      | 格式适配器行为、安全限额与已知局限                                                                                           |
 | [adr/](adr/)                                                                             | ✅ 001–004 | 架构决策记录：monorepo / 解析-渲染分层 / 进度哈希绑定 / Tauri 快捷键 spike                                                   |
 
 ## 规划中的文档（随里程碑创建）
 
-| 位置            | 启动时机 | 内容                                                          |
-| --------------- | -------- | ------------------------------------------------------------- |
-| `docs/formats/` | M1       | 每种格式适配器的解析细节、已知脏样本问题与处理方式            |
-| `docs/api/`     | M3       | `/api/v1` 详细设计：认证、错误码、分页、幂等性、上传/范围请求 |
+| 位置        | 启动时机 | 内容                                                          |
+| ----------- | -------- | ------------------------------------------------------------- |
+| `docs/api/` | M3       | `/api/v1` 详细设计：认证、错误码、分页、幂等性、上传/范围请求 |
 
 ## 仓库内其他规范载体
 
