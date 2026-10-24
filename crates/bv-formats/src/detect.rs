@@ -12,7 +12,8 @@ use crate::{BookSource, FileSource};
 use std::path::Path;
 
 /// 支持的书籍格式（P0 范围）
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FormatKind {
     Epub,
     Txt,

@@ -114,7 +114,8 @@ pub fn sha256_of(digest: &[u8]) -> String {
 }
 
 /// 解析器身份（需求 §5.1：记录解析器名称/版本，便于诊断与迁移）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ParserInfo {
     pub parser: &'static str,
     pub version: &'static str,
@@ -129,18 +130,20 @@ impl ParserInfo {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct ResourceRef {
     pub id: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ResourceData {
     pub mime: String,
     pub bytes: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BookMetadata {
     pub title: Option<String>,
     pub authors: Vec<String>,
@@ -152,12 +155,13 @@ pub struct BookMetadata {
 }
 
 /// 统一目录（需求 §5.1：适配器输出统一元数据、目录、资源与阅读位置模型）
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BookContents {
     /// 小说（EPUB/TXT）：章节列表 + 文本编码（TXT 按需读取时解码用）
     Novel {
         chapters: Vec<Chapter>,
-        encoding: Option<&'static str>,
+        encoding: Option<String>,
     },
     /// 漫画（CBZ/图片文件夹）：自然排序后的页面
     Comic { pages: Vec<Page> },
@@ -165,20 +169,23 @@ pub enum BookContents {
     Document { pages: u32, toc: Vec<TocItem> },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Chapter {
     pub id: String,
     pub title: Option<String>,
     pub locator: Locator,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Page {
     pub index: u32,
     pub locator: Locator,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Locator {
     /// zip 内条目名（EPUB 章节资源 / CBZ 页面）
     ZipEntry(String),
@@ -188,14 +195,16 @@ pub enum Locator {
     FilePath(String),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TocItem {
     pub title: String,
     pub page: u32,
 }
 
 /// 完整解析结果：[`parse_book`] 的输出
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ParsedBook {
     pub kind: FormatKind,
     /// 源内容哈希（进度绑定用，ADR-003）；图片文件夹为结构哈希（见 docs/formats）

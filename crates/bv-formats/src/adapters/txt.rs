@@ -65,7 +65,7 @@ impl BookParser for TxtParser {
                     },
                 })
                 .collect(),
-            encoding: Some(enc.name()),
+            encoding: Some(enc.name().to_string()),
         })
     }
 

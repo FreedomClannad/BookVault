@@ -4,6 +4,7 @@ members = [
     "crates/bv-formats",
     "crates/bv-protocol",
     "apps/desktop/src-tauri",
+    "apps/server",
 ]
 
 [workspace.package]

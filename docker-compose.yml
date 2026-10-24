@@ -1,0 +1,21 @@
+# BookVault NAS 服务端部署（M3.8）
+# 用法：docker compose up -d
+# 数据全部落在 ./data（备份该目录即备份全部书库，见 apps/server/README.md）
+
+services:
+  bookvault:
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+    image: bookvault-server:0.1.0
+    container_name: bookvault
+    ports:
+      - "8730:8730"
+    volumes:
+      - ./data:/data
+    environment:
+      BOOKVAULT_BIND: 0.0.0.0:8730
+      BOOKVAULT_DATA_DIR: /data
+      # 如需固定配对码（否则首次启动生成并打印/写入 data/pairing-code.txt）：
+      # BOOKVAULT_PAIRING_CODE: "你的配对码"
+    restart: unless-stopped

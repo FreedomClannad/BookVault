@@ -17,8 +17,24 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 tauri-plugin-global-shortcut = "2"
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
+bv-formats = { path = "../../../crates/bv-formats" }
+rusqlite = { version = "0.32", features = ["bundled"] }
+ulid = "3"
 
 [lints]
 workspace = true
+
+# 仅 M4 端到端同步测试需要服务端（in-process 起 axum）
+[dev-dependencies]
+axum = "0.8.9"
+bookvault-server = { path = "../../server" }
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[[test]]
+name = "sync_e2e"
+path = "tests/sync_e2e.rs"

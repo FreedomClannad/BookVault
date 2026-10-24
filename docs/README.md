@@ -13,7 +13,14 @@
 | [plans/phase-1-implementation-plan.md](plans/phase-1-implementation-plan.md)             | ✅ 已确认  | Phase 1 技术选型、目录结构、解析库许可证核实、Work–Edition–BookFile 三层领域模型、里程碑 M0–M4 与验收标准（决策记录见其 §9） |
 | [standards/AI_DEV_PROCESS.md](standards/AI_DEV_PROCESS.md)                               | ✅ 已采纳  | AI 开发流程规范调研（AGENTS.md 开放标准、spec-first、skills）与本仓库执行流程                                                |
 | [formats/README.md](formats/README.md)                                                   | ✅ M1      | 格式适配器行为、安全限额与已知局限                                                                                           |
-| [adr/](adr/)                                                                             | ✅ 001–004 | 架构决策记录：monorepo / 解析-渲染分层 / 进度哈希绑定 / Tauri 快捷键 spike                                                   |
+| [adr/](adr/)                                                                             | ✅ 001–009 | 架构决策记录：monorepo / 解析-渲染分层 / 进度哈希绑定 / Tauri 快捷键 spike                                                   |
+
+## 部署文档
+
+| 文档                                                  | 说明                                                                            |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------- |
+| [`apps/server/README.md`](../apps/server/README.md)   | NAS 服务端部署（Docker Compose / 裸机）、API 概览、**备份与恢复步骤**、安全边界 |
+| [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) | 依赖许可证清单（源码级核验）                                                    |
 
 ## 规划中的文档（随里程碑创建）
 

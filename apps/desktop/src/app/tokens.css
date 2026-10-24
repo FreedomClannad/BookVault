@@ -1,0 +1,75 @@
+/* BookVault 设计令牌（ui-style skill §2；M2 落地为 CSS variables） */
+
+:root {
+  --bg: #f6f5f2;
+  --bg-elevated: #ffffff;
+  --fg: #1f2328;
+  --fg-muted: #6b7280;
+  --accent: #3b6ea5;
+  --accent-weak: #e3edf7;
+  --danger: #b3362b;
+  --radius-card: 8px;
+  --radius-ctrl: 6px;
+  --shadow-pop: 0 8px 24px rgba(31, 35, 40, 0.14);
+
+  /* 阅读主题（独立于 UI 主题） */
+  --reading-bg: #f8f1e3;
+  --reading-fg: #3a332a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1b1d21;
+    --bg-elevated: #24272c;
+    --fg: #e6e4df;
+    --fg-muted: #9aa0a8;
+    --accent: #7aa7d9;
+    --accent-weak: #2a3441;
+    --reading-bg: #262524;
+    --reading-fg: #cfc9bd;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  font-size: 15px;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: var(--bg-elevated);
+  border: 1px solid var(--fg-muted);
+  border-radius: var(--radius-ctrl);
+  padding: 6px 14px;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+input {
+  font: inherit;
+  padding: 6px 10px;
+  border: 1px solid var(--fg-muted);
+  border-radius: var(--radius-ctrl);
+  background: var(--bg-elevated);
+  color: var(--fg);
+}

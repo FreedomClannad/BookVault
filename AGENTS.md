@@ -8,7 +8,7 @@
 **BookVault** —— 个人小说与漫画阅读器（桌面端 + 移动端 + 自托管 NAS 服务端），局域网优先、混合存储、离线可用。
 
 - 权威需求：`docs/requirements/BOOKVAULT_AI_PROJECT_BRIEF.md`（产品方向以其为准，不得擅自更改其「已确认」决策）。
-- 当前进度：**M1 格式核心 ✅ 完成**（2026-10-24：EPUB/TXT/PDF/CBZ/图片文件夹适配器 + 26 测试全绿 + 安全限额，局限见 `docs/formats/`）。下一步 **M2 桌面端本地闭环**。Phase 1 计划：`docs/plans/phase-1-implementation-plan.md`（已确认，三层模型 Work/Edition/BookFile）。
+- 当前进度：**Phase 1 代码完成（M0–M4 ✅，2026-10-24）**：格式核心、桌面本地闭环（SQLite 三层模型 + 四阅读器 + 进度哈希绑定）、NAS 服务端（配对/书库/流式上传/同步，Docker Compose）、双设备 e2e 同步测试通过；`make check` 全绿。剩余：GUI 人工验证清单（计划 §13）与 P1 及后续阶段。Phase 1 计划：`docs/plans/phase-1-implementation-plan.md`（已确认，三层模型 Work/Edition/BookFile）。
 
 ## 沟通约定
 

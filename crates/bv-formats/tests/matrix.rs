@@ -81,7 +81,7 @@ fn txt_utf8_chapters() {
     };
     assert_eq!(chapters.len(), 3);
     assert!(chapters[0].title.as_deref().unwrap().contains("初入书库"));
-    assert_eq!(encoding, Some("UTF-8")); // BOM 无，但 chardetng 猜 UTF-8
+    assert_eq!(encoding.as_deref(), Some("UTF-8")); // BOM 无，但 chardetng 猜 UTF-8
     assert_eq!(book.sha256.len(), 64);
 }
 

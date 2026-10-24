@@ -10,6 +10,7 @@ chardetng = "1.0.0"
 encoding_rs = "0.8.42"
 lopdf = "0.46.0"
 quick-xml = "0.42.0"
+serde = { workspace = true, features = ["derive"] }
 sha2 = "0.11.1"
 thiserror = { workspace = true }
 zip = { version = "=9.0.5", default-features = false, features = ["deflate"] }
