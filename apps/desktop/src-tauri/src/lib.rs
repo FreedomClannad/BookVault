@@ -6,7 +6,7 @@
 //! - 进度：save_reading_progress（绑定内容哈希，ADR-003）
 //! - 设置：get_settings / set_setting（M2.12）
 //! - NAS 同步：nas_pair / nas_status / nas_push / nas_pull（M4）
-//! - M0.6 spike：全局快捷键隐藏/恢复 + open_decoy_window（ADR-004）
+//! - M0.6 spike 成品化：Ctrl/Cmd+Shift+B 隐藏主窗口并弹出伪装窗口（decoy.html，ADR-004）
 
 use crate::library::{ImportedFile, Library};
 use rusqlite::Connection;
@@ -38,6 +38,8 @@ pub struct WorkRow {
     pub title: String,
     pub authors: Vec<String>,
     pub has_cover: bool,
+    /// 本地分类（导入时自动归类，可手动改；''=未分类；不参与 NAS 同步）
+    pub category: String,
     pub files: Vec<FileRow>,
     /// 最近阅读时间（毫秒；None=未读）
     pub last_read_at: Option<i64>,
@@ -66,6 +68,8 @@ pub struct DeviceProgress {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenedBook {
+    /// 所属作品（Work）id：阅读器按书（而非按文件版本）记忆排版
+    pub work_id: String,
     pub file: FileRow,
     /// 解析器给出的哈希（当前文件内容）
     pub parsed_sha256: String,
@@ -93,10 +97,10 @@ fn import_paths(app: tauri::AppHandle, paths: Vec<String>) -> Result<Vec<Importe
 fn list_works(app: tauri::AppHandle) -> Result<Vec<WorkRow>, String> {
     let st = state(&app);
     let conn = st.db.lock().map_err(|e| e.to_string())?;
-    let mut works: Vec<(String, String, String, String, Option<i64>)> = {
+    let mut works: Vec<(String, String, String, String, String, Option<i64>)> = {
         let mut stmt = conn
             .prepare(
-                "SELECT w.id, w.title, w.authors, COALESCE(w.cover_file, ''), \
+                "SELECT w.id, w.title, w.authors, COALESCE(w.cover_file, ''), w.category, \
                  (SELECT MAX(rp.updated_at) FROM reading_progress rp \
                   JOIN book_files bf ON bf.id = rp.book_file_id \
                   JOIN editions e2 ON e2.id = bf.edition_id \
@@ -106,14 +110,21 @@ fn list_works(app: tauri::AppHandle) -> Result<Vec<WorkRow>, String> {
             )
             .map_err(|e| e.to_string())?;
         stmt.query_map([], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+            ))
         })
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?
     };
     let mut out = Vec::with_capacity(works.len());
-    for (id, title, authors_json, cover, last_read_at) in works.drain(..) {
+    for (id, title, authors_json, cover, category, last_read_at) in works.drain(..) {
         let files: Vec<FileRow> = {
             let mut stmt = conn
                 .prepare(
@@ -145,11 +156,49 @@ fn list_works(app: tauri::AppHandle) -> Result<Vec<WorkRow>, String> {
             title,
             authors: serde_json::from_str(&authors_json).unwrap_or_default(),
             has_cover: !cover.is_empty(),
+            category,
             files,
             last_read_at,
         });
     }
     Ok(out)
+}
+
+#[tauri::command]
+fn set_work_category(
+    app: tauri::AppHandle,
+    work_id: String,
+    category: String,
+) -> Result<(), String> {
+    let st = state(&app);
+    let conn = st.db.lock().map_err(|e| e.to_string())?;
+    library::set_work_category(&conn, &work_id, &category)
+}
+
+/// 前端生成的封面（canvas dataURL 的 base64）落盘
+#[tauri::command]
+fn save_cover(
+    app: tauri::AppHandle,
+    file_id: String,
+    ext: String,
+    base64: String,
+) -> Result<(), String> {
+    use base64::Engine as _;
+    let payload = base64.trim_start_matches("data:image/png;base64,");
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(payload)
+        .map_err(|e| format!("封面 base64 解码失败: {e}"))?;
+    let st = state(&app);
+    let conn = st.db.lock().map_err(|e| e.to_string())?;
+    Library::new(&st.data_dir).save_cover_bytes(&conn, &file_id, &bytes, &ext)
+}
+
+/// 用户通过系统对话框选择的图片设为封面（路径来源受控：仅限对话框返回值）
+#[tauri::command]
+fn import_cover(app: tauri::AppHandle, file_id: String, path: String) -> Result<(), String> {
+    let st = state(&app);
+    let conn = st.db.lock().map_err(|e| e.to_string())?;
+    Library::new(&st.data_dir).import_cover_file(&conn, &file_id, std::path::Path::new(&path))
 }
 
 /// 打开书籍：源文件丢失给出可诊断错误（M2.9）；哈希漂移置 hash_drift 供 UI 降级
@@ -193,6 +242,7 @@ fn open_book(app: tauri::AppHandle, file_id: String) -> Result<OpenedBook, Strin
     let hash_drift = progress.iter().any(|pr| pr.content_sha256 != book.sha256);
 
     Ok(OpenedBook {
+        work_id: crate::library::work_id_of(&conn, &file_id).unwrap_or_default(),
         file: FileRow {
             id: file_id,
             format,
@@ -390,29 +440,42 @@ fn hostname() -> String {
 
 // ---------- M0.6 spike（ADR-004） ----------
 
+/// 伪装窗口（快速隐藏的「效果」层）：纯静态 decoy.html，与主应用无共享代码，
+/// 内容与书库毫无关系（需求 §2.1：界面与窗口标题都不得出现书籍信息）。
+fn show_decoy(app: &tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("decoy") {
+        let _ = win.show();
+        let _ = win.set_focus();
+        return;
+    }
+    let _ =
+        tauri::WebviewWindowBuilder::new(app, "decoy", tauri::WebviewUrl::App("decoy.html".into()))
+            .title("工作笔记")
+            .inner_size(880.0, 640.0)
+            .build();
+}
+
+/// Ctrl/Cmd+Shift+B：主窗口可见 → 隐藏（含任务栏）并弹出伪装界面；
+/// 不可见 → 关闭伪装界面并恢复主窗口。
 fn toggle_main_window(app: &tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         if win.is_visible().unwrap_or(true) {
             let _ = win.hide();
+            show_decoy(app);
         } else {
+            if let Some(decoy) = app.get_webview_window("decoy") {
+                let _ = decoy.hide();
+            }
             let _ = win.show();
             let _ = win.set_focus();
         }
     }
 }
 
+/// 设置页「预览伪装界面」入口：只展示伪装窗口，不动主窗口。
 #[tauri::command]
 fn open_decoy_window(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(win) = app.get_webview_window("decoy") {
-        let _ = win.show();
-        let _ = win.set_focus();
-        return Ok(());
-    }
-    tauri::WebviewWindowBuilder::new(&app, "decoy", tauri::WebviewUrl::App("index.html".into()))
-        .title("Terminal")
-        .inner_size(720.0, 480.0)
-        .build()
-        .map_err(|e| e.to_string())?;
+    show_decoy(&app);
     Ok(())
 }
 
@@ -447,6 +510,9 @@ pub fn run() {
             open_decoy_window,
             import_paths,
             list_works,
+            set_work_category,
+            save_cover,
+            import_cover,
             open_book,
             get_resource,
             get_file_bytes,

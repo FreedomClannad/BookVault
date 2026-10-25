@@ -123,12 +123,238 @@
     @apply inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-md border border-line bg-paper-raised px-4 py-[7px] text-sm text-fg transition-colors duration-150 hover:border-accent hover:text-accent disabled:cursor-default disabled:opacity-45;
   }
   .btn-primary {
+    /* 深色主题下 accent 变浅，主按钮文字翻转为深色以保持 ≥4.5:1 对比度 */
     @apply border-accent bg-accent text-[#f4f6f8] hover:border-accent-strong hover:bg-accent-strong hover:text-white;
+    @apply dark:text-[#1b2027] dark:hover:text-[#161a20];
   }
   .btn-ghost {
     @apply border-transparent bg-transparent text-muted hover:border-transparent hover:bg-accent-weak hover:text-accent;
   }
   .input {
     @apply rounded-md border border-line bg-paper-raised px-3 py-[7px] text-sm text-fg placeholder:text-muted;
+  }
+
+  /* ---------- 3D 书柜（ui-style §5 书架，A 方向书柜形态） ---------- */
+  /* 每本书 = 封面(前) + 书脊(左) + 页缘(右) 的 preserve-3d 盒；
+     书脊朝向读者，悬停绕书脊旋转抽出封面。禁止在此之外的组件复刻立体效果。 */
+  .bookshelf {
+    display: flex;
+    align-items: flex-end;
+    gap: 30px;
+    overflow-x: auto;
+    padding: 22px 26px 8px;
+    min-height: 236px;
+  }
+  .book3d-scene {
+    position: relative;
+    flex: none;
+    perspective: 900px;
+    padding-bottom: 24px;
+  }
+  .book3d-scene::after {
+    content: "";
+    position: absolute;
+    left: 2px;
+    right: 16px;
+    bottom: 18px;
+    height: 10px;
+    border-radius: 50%;
+    background: radial-gradient(ellipse, rgb(0 0 0 / 0.2), transparent 70%);
+  }
+  .book3d {
+    position: relative;
+    display: block;
+    width: 112px;
+    height: 160px;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    transform-style: preserve-3d;
+    transform: rotateY(26deg);
+    transform-origin: left center;
+    transition:
+      transform 0.25s ease,
+      box-shadow 0.25s ease;
+  }
+  .book3d:hover,
+  .book3d:focus-visible {
+    transform: rotateY(8deg) translateZ(22px);
+  }
+  .book3d-face {
+    position: absolute;
+    inset: 0;
+  }
+  .book3d-front {
+    transform: translateZ(var(--thick));
+    overflow: hidden;
+    border-radius: 2px 4px 4px 2px;
+    box-shadow: inset 4px 0 7px rgb(0 0 0 / 0.18);
+  }
+  .book3d-front img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .book3d-fallback {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(
+      160deg,
+      color-mix(in oklab, var(--spine), white 12%),
+      color-mix(in oklab, var(--spine), black 24%)
+    );
+  }
+  .book3d-fallback i {
+    padding: 0 10px;
+    font-family: var(--font-display);
+    font-size: 15px;
+    font-style: normal;
+    line-height: 1.7;
+    text-align: center;
+    color: #f6ece8;
+  }
+  .book3d-back {
+    background: color-mix(in oklab, var(--spine), black 30%);
+  }
+  .book3d-spine {
+    inset: 0 auto 0 0;
+    width: var(--thick);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    border-radius: 2px 0 0 2px;
+    background: linear-gradient(
+      90deg,
+      color-mix(in oklab, var(--spine), black 28%),
+      var(--spine) 45%
+    );
+    transform-origin: left center;
+    transform: rotateY(-90deg);
+  }
+  .book3d-spine > span {
+    max-height: 148px;
+    overflow: hidden;
+    font-family: var(--font-display);
+    font-size: 13px;
+    letter-spacing: 3px;
+    writing-mode: vertical-rl;
+    white-space: nowrap;
+    color: #f6ece8;
+  }
+  .book3d-pages {
+    inset: 7px 0 7px auto;
+    width: calc(var(--thick) - 2px);
+    background: repeating-linear-gradient(90deg, #f1ead9 0 2px, #cfc6ae 2px 3px);
+    transform-origin: right center;
+    transform: rotateY(90deg);
+  }
+  .book3d-caption {
+    width: 112px;
+    margin-top: 9px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: center;
+    font-size: 12px;
+    color: var(--color-fg);
+  }
+  .book3d-actions {
+    position: absolute;
+    top: -10px;
+    right: -10px;
+    z-index: 10;
+    display: none;
+    gap: 4px;
+  }
+  .book3d-scene:hover .book3d-actions,
+  .book3d-scene:focus-within .book3d-actions {
+    display: flex;
+  }
+  .book3d-actions button {
+    padding: 2px 9px;
+    border: 1px solid var(--color-line);
+    border-radius: 5px;
+    background: var(--color-paper-raised);
+    color: var(--color-muted);
+    font-size: 11px;
+  }
+  .book3d-actions button:hover {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+  }
+  .book3d-menu {
+    position: absolute;
+    top: 16px;
+    right: -10px;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    min-width: 92px;
+    max-height: 250px;
+    overflow: auto;
+    padding: 4px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-paper-raised);
+    box-shadow: var(--shadow-2);
+  }
+  .book3d-menu button {
+    padding: 5px 10px;
+    border: 0;
+    border-radius: 5px;
+    background: none;
+    color: var(--color-fg);
+    font-size: 12px;
+    text-align: left;
+  }
+  .book3d-menu button:hover,
+  .book3d-menu button.active {
+    background: var(--color-accent-weak);
+    color: var(--color-accent-strong);
+  }
+  .shelf-board {
+    height: 8px;
+    margin: 0 26px;
+    border-radius: 3px;
+    background: linear-gradient(
+      var(--color-line),
+      color-mix(in oklab, var(--color-line), black 14%)
+    );
+    box-shadow: 0 3px 6px rgb(90 74 48 / 0.2);
+  }
+
+  /* ---------- 阅读器翻页动画（包A 交互移植） ---------- */
+  /* 漫画单页进出；TXT 分页由组件内联 transform 过渡 / 覆盖层实现。
+     reduced-motion 用户已在 base 层全局禁用动画。 */
+  @keyframes pv-page-in-right {
+    from {
+      opacity: 0;
+      transform: translateX(36px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+  @keyframes pv-page-in-left {
+    from {
+      opacity: 0;
+      transform: translateX(-36px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+  .pv-page-in-right {
+    animation: pv-page-in-right var(--page-anim-dur, 240ms) ease both;
+  }
+  .pv-page-in-left {
+    animation: pv-page-in-left var(--page-anim-dur, 240ms) ease both;
   }
 }

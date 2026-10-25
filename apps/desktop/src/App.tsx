@@ -1,5 +1,6 @@
 /**
- * 应用根组件：墨色侧栏壳 + 书架/阅读/设置三视图，窗口级拖拽导入。
+ * 应用根组件：墨色顶栏 + 书架主区；阅读/设置为全屏接管（沉浸式）。
+ * 设置从顶栏齿轮进入；书架为 3D 书柜（Library），支持分类与封面管理。
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -11,24 +12,9 @@ import "./app/app.css";
 
 type View = "library" | "reader" | "settings";
 
-function ShelfIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="h-4 w-4 flex-none" aria-hidden="true">
-      <path
-        d="M4 4h7v16H4zM13 4h7v16h-7z"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinejoin="round"
-      />
-      <path d="M3 20.5h18" fill="none" stroke="currentColor" strokeWidth="1.6" />
-    </svg>
-  );
-}
-
 function GearIcon() {
   return (
-    <svg viewBox="0 0 24 24" className="h-4 w-4 flex-none" aria-hidden="true">
+    <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
       <circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" strokeWidth="1.6" />
       <path
         d="M12 3.5v2.2M12 18.3v2.2M4.9 7.8l1.9 1.1M17.2 15.1l1.9 1.1M4.9 16.2l1.9-1.1M17.2 8.9l1.9-1.1"
@@ -56,9 +42,10 @@ export default function App() {
     void api.nasStatus().then((s) => setNasOn(Boolean(s)));
   }, []);
 
+  // 首次进入与从阅读/设置返回书架时刷新（导入、分类、封面、拉取后的变化都走这里）
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    if (view === "library") void refresh();
+  }, [view, refresh]);
 
   useEffect(() => {
     if (!toast) return;
@@ -92,106 +79,91 @@ export default function App() {
     [importPaths],
   );
 
-  const reading = view === "reader" && readingFileId;
+  const toastEl = toast && (
+    <div className="fixed bottom-7 left-1/2 z-50 -translate-x-1/2 rounded-lg bg-chrome-deep px-5 py-2.5 text-sm text-chrome-fg shadow-2">
+      {toast}
+    </div>
+  );
+
+  const exitReader = useCallback(() => {
+    setReadingFileId(null);
+    setView("library");
+  }, []);
+
+  // 阅读中：全屏接管，顶栏不渲染（沉浸式）
+  if (view === "reader" && readingFileId !== null) {
+    return (
+      <div className="h-full min-w-[720px]" onDrop={onDrop} onDragOver={(e) => e.preventDefault()}>
+        <Reader fileId={readingFileId} onExit={exitReader} />
+        {toastEl}
+      </div>
+    );
+  }
+
+  // 设置：全屏页面，带返回按钮
+  if (view === "settings") {
+    return (
+      <div className="h-full min-w-[720px]">
+        <Settings onBack={() => setView("library")} />
+        {toastEl}
+      </div>
+    );
+  }
 
   return (
     <div
-      className="flex h-full min-w-[720px]"
+      className="flex h-full min-w-[720px] flex-col"
       onDrop={onDrop}
       onDragOver={(e) => e.preventDefault()}
     >
-      <aside className="flex w-52 flex-none flex-col bg-linear-to-b from-chrome to-chrome-deep px-3.5 pb-4 pt-5 text-chrome-fg">
-        <div className="flex items-center gap-3 border-b border-white/10 px-1.5 pb-[18px]">
-          <div
-            className="flex h-[34px] w-[34px] flex-none items-center justify-center rounded-[7px] bg-seal font-display text-xl text-[#f6ece8] shadow-[inset_0_0_0_1.5px_rgba(255,255,255,0.22)]"
-            aria-hidden="true"
-          >
-            书
-          </div>
-          <div className="min-w-0">
-            <div className="truncate font-display text-[17px] tracking-wide text-[#e8eaee]">
-              BookVault
-            </div>
-            <div className="mt-px text-[11px] text-chrome-muted">私人藏书之所</div>
-          </div>
+      <header className="flex h-12 flex-none items-center gap-3 bg-linear-to-r from-chrome to-chrome-deep px-4 text-chrome-fg">
+        <div
+          className="flex h-[30px] w-[30px] flex-none items-center justify-center rounded-[7px] bg-seal font-display text-base text-[#f6ece8] shadow-[inset_0_0_0_1.5px_rgba(255,255,255,0.22)]"
+          aria-hidden="true"
+        >
+          书
         </div>
+        <div className="font-display text-[15px] tracking-wide text-[#e8eaee]">BookVault</div>
+        <span className="hidden text-[11px] text-chrome-muted md:inline">私人藏书之所</span>
 
-        <nav className="mt-3.5 flex flex-col gap-0.5">
-          <button
-            className={`flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm hover:bg-white/[0.06] hover:text-[#eef0f3] ${
-              view === "library" || reading
-                ? "bg-white/[0.06] text-white shadow-[inset_2px_0_0_var(--color-seal)]"
-                : "text-chrome-fg"
-            }`}
-            onClick={() => setView("library")}
-          >
-            <ShelfIcon />
-            书架
-          </button>
-          <button
-            className={`flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm hover:bg-white/[0.06] hover:text-[#eef0f3] ${
-              view === "settings"
-                ? "bg-white/[0.06] text-white shadow-[inset_2px_0_0_var(--color-seal)]"
-                : "text-chrome-fg"
-            }`}
-            onClick={() => setView("settings")}
-          >
-            <GearIcon />
-            设置
-          </button>
-        </nav>
-
-        <div className="mt-auto flex flex-col gap-2 border-t border-white/10 px-1.5 pt-3">
-          <div
-            className={`flex items-center gap-1.5 text-xs ${nasOn ? "text-chrome-fg" : "text-chrome-muted"}`}
-          >
-            <span
-              className={`h-[7px] w-[7px] rounded-full ${nasOn ? "bg-[#58a97a]" : "bg-chrome-muted"}`}
-            />
-            {nasOn ? "NAS 已连接" : "NAS 未连接"}
-          </div>
-          <div className="text-[11px] leading-relaxed text-chrome-muted">
-            Cmd/Ctrl+Shift+B 快速隐藏
-          </div>
+        <span className="ml-auto" />
+        <div
+          title={nasOn ? "NAS 已连接" : "NAS 未连接"}
+          className={`flex items-center gap-1.5 text-xs ${nasOn ? "text-chrome-fg" : "text-chrome-muted"}`}
+        >
+          <span
+            className={`h-[7px] w-[7px] rounded-full ${nasOn ? "bg-[#58a97a]" : "bg-chrome-muted"}`}
+          />
+          <span className="hidden sm:inline">{nasOn ? "NAS 已连接" : "NAS 未连接"}</span>
         </div>
-      </aside>
+        <span className="h-5 w-px bg-white/10" aria-hidden="true" />
+        <button
+          title="设置"
+          aria-label="设置"
+          onClick={() => setView("settings")}
+          className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-chrome-muted transition-colors hover:bg-white/10 hover:text-white"
+        >
+          <GearIcon />
+        </button>
+      </header>
 
       <main className="flex min-w-0 flex-1 flex-col bg-paper">
-        {(view === "library" || reading) && (
-          <Library
-            works={works}
-            hidden={Boolean(reading)}
-            onOpen={(fileId) => {
-              setReadingFileId(fileId);
-              setView("reader");
-            }}
-            onImport={async () => importPaths(await api.pickFiles())}
-            onImportDir={async () => {
-              const dir = await api.pickDirectory();
-              if (dir) void importPaths([dir]);
-            }}
-          />
-        )}
-
-        {reading && (
-          <Reader
-            fileId={readingFileId}
-            onExit={() => {
-              setReadingFileId(null);
-              setView("library");
-              void refresh();
-            }}
-          />
-        )}
-
-        {view === "settings" && <Settings onBack={refresh} />}
+        <Library
+          works={works}
+          onOpen={(fileId) => {
+            setReadingFileId(fileId);
+            setView("reader");
+          }}
+          onImport={async () => importPaths(await api.pickFiles())}
+          onImportDir={async () => {
+            const dir = await api.pickDirectory();
+            if (dir) void importPaths([dir]);
+          }}
+          onDataChanged={() => void refresh()}
+        />
       </main>
 
-      {toast && (
-        <div className="fixed bottom-7 left-1/2 z-50 -translate-x-1/2 rounded-lg bg-chrome-deep px-5 py-2.5 text-sm text-chrome-fg shadow-2">
-          {toast}
-        </div>
-      )}
+      {toastEl}
     </div>
   );
 }

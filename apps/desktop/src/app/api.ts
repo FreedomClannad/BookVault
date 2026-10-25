@@ -23,6 +23,8 @@ export interface WorkRow {
   title: string;
   authors: string[];
   hasCover: boolean;
+  /** 本地分类（导入自动归类，可手动改；""=未分类；不参与 NAS 同步） */
+  category: string;
   files: FileRow[];
   /** 最近阅读时间（毫秒；null=未读） */
   lastReadAt: number | null;
@@ -97,6 +99,8 @@ export type ReadingLocation =
   | { type: "comic"; imageIndex: number };
 
 export interface OpenedBook {
+  /** 所属作品 id：逐书排版记忆的键（同作品多版本共享设置） */
+  workId: string;
   file: FileRow;
   parsedSha256: string;
   book: ParsedBookDto;
@@ -142,6 +146,7 @@ const mockWork: WorkRow = {
   title: "演示之书（浏览器 mock）",
   authors: ["BookVault"],
   hasCover: false,
+  category: "",
   lastReadAt: Date.now() - 42 * 60_000,
   files: [
     {
@@ -182,9 +187,32 @@ export const api = {
     return (await rawInvoke("list_works")) as WorkRow[];
   },
 
+  async setWorkCategory(workId: string, category: string): Promise<void> {
+    if (!hasTauri) return;
+    await rawInvoke("set_work_category", { workId, category });
+  },
+
+  /** 保存前端生成的封面（PNG dataURL 或纯 base64）；成功后需刷新书库使 hasCover 生效 */
+  async saveCover(fileId: string, dataUrlOrBase64: string): Promise<void> {
+    if (!hasTauri) return;
+    const m = /^data:image\/(\w+);base64,(.+)$/.exec(dataUrlOrBase64);
+    const ext = m && m[1] !== "jpeg" ? (m[1] as string) : m ? "jpg" : "png";
+    const payload = m ? m[2] : dataUrlOrBase64;
+    await rawInvoke("save_cover", { fileId, ext, base64: payload });
+  },
+
+  /** 用户从系统对话框选一张图片设为封面（路径来源受控） */
+  async importCover(fileId: string): Promise<void> {
+    if (!hasTauri) return;
+    const path = await pickImage();
+    if (!path) return;
+    await rawInvoke("import_cover", { fileId, path });
+  },
+
   async openBook(fileId: string): Promise<OpenedBook> {
     if (!hasTauri) {
       return {
+        workId: mockWork.id,
         file: mockWork.files[0],
         parsedSha256: "0".repeat(64),
         book: {
@@ -283,6 +311,20 @@ export const api = {
     })();
   },
 };
+
+/** 用户选一张本地图片（设封面用），返回路径 */
+function pickImage(): Promise<string | null> {
+  if (!hasTauri) return Promise.resolve(null);
+  return (async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const sel = await open({
+      multiple: false,
+      directory: false,
+      filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp"] }],
+    });
+    return typeof sel === "string" ? sel : null;
+  })();
+}
 
 /** 二进制 → data URL（EPUB 图片内联用） */
 export function toDataUrl(bytes: Uint8Array, mime: string): string {

@@ -94,7 +94,8 @@ impl Library {
             .title
             .clone()
             .unwrap_or_else(|| default_title(path));
-        let file_id = insert_work_tree(conn, &title, &parsed, &stored_path, is_dir)?;
+        let category = classify(&title, kind_str(parsed.kind));
+        let file_id = insert_work_tree(conn, &title, &category, &parsed, &stored_path, is_dir)?;
 
         // 封面缓存（失败不阻塞导入）
         let _ = self.cache_cover(conn, &file_id, path, &parsed);
@@ -140,10 +141,31 @@ impl Library {
         };
         let bytes = read_resource_bytes(src, parsed, cover_ref.id.as_str())?;
         let ext = mime_ext(&bytes);
+        self.save_cover_bytes(conn, file_id, &bytes, ext)
+    }
+
+    /// 把封面字节写入 covers 目录并登记到 works.cover_file
+    /// （供解析器封面缓存、前端 PDF 缩略图/TXT 生成封面/手动设置封面共用）
+    pub fn save_cover_bytes(
+        &self,
+        conn: &Connection,
+        file_id: &str,
+        bytes: &[u8],
+        ext: &str,
+    ) -> Result<(), String> {
+        if bytes.is_empty() {
+            return Err("封面内容为空".into());
+        }
+        if bytes.len() > 10 * 1024 * 1024 {
+            return Err("封面超过 10MB".into());
+        }
+        if !matches!(ext, "png" | "jpg" | "webp" | "gif") {
+            return Err(format!("不支持的封面格式: {ext}"));
+        }
         let covers = self.data_dir.join("covers");
         std::fs::create_dir_all(&covers).map_err(|e| e.to_string())?;
         let cover_path = covers.join(format!("{file_id}.{ext}"));
-        std::fs::write(&cover_path, &bytes).map_err(|e| e.to_string())?;
+        std::fs::write(&cover_path, bytes).map_err(|e| e.to_string())?;
         conn.execute(
             "UPDATE works SET cover_file = ?2 WHERE id = ( \
                SELECT w.id FROM works w \
@@ -154,6 +176,44 @@ impl Library {
         .map_err(|e| e.to_string())?;
         Ok(())
     }
+
+    /// 从用户通过系统对话框选择的图片导入封面（路径来源受控：仅限对话框返回值），
+    /// 校验扩展名白名单与大小上限，复制进受管 covers 目录。
+    pub fn import_cover_file(
+        &self,
+        conn: &Connection,
+        file_id: &str,
+        src: &Path,
+    ) -> Result<(), String> {
+        let ext = src
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .unwrap_or_default();
+        if !matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp") {
+            return Err(format!("仅支持 png/jpg/webp 图片，收到: {ext}"));
+        }
+        let meta = std::fs::metadata(src).map_err(|e| format!("读取图片失败: {e}"))?;
+        if meta.len() > 10 * 1024 * 1024 {
+            return Err("封面图片超过 10MB".into());
+        }
+        let bytes = std::fs::read(src).map_err(|e| format!("读取图片失败: {e}"))?;
+        let ext = if ext == "jpeg" { "jpg" } else { ext.as_str() };
+        self.save_cover_bytes(conn, file_id, &bytes, ext)
+    }
+}
+
+/// 手动改分类（书架入口）；category 传空串表示「未分类」
+pub fn set_work_category(conn: &Connection, work_id: &str, category: &str) -> Result<(), String> {
+    if !category.is_empty() && !CATEGORIES.contains(&category) {
+        return Err(format!("未知分类: {category}"));
+    }
+    conn.execute(
+        "UPDATE works SET category = ?2, updated_at = ?3 WHERE id = ?1",
+        rusqlite::params![work_id, category, db::now_ms()],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// 通过对应解析器读取资源字节（EPUB/CBZ 走 zip；图片文件夹走文件系统；TXT 走区间）
@@ -186,6 +246,128 @@ fn default_title(path: &Path) -> String {
         .and_then(|s| s.to_str())
         .unwrap_or("未命名")
         .to_string()
+}
+
+/// 固定分类词表（与前端 categories.ts 保持一致；''=未分类，不入库到此列表）
+pub const CATEGORIES: [&str; 10] = [
+    "玄幻", "都市", "历史", "武侠", "科幻", "言情", "悬疑", "漫画", "技术", "文档",
+];
+
+/// 导入时的自动归类：格式优先（漫画/文档），再按标题关键词匹配。
+/// 关键词来自常见中文网文/电子书命名习惯，命中不了就落「未分类」，
+/// 用户可随时在书架手动改（set_work_category）。
+pub fn classify(title: &str, format: &str) -> String {
+    match format {
+        "cbz" | "image_dir" => return "漫画".into(),
+        "pdf" => {
+            if matches_keyword(
+                title,
+                &[
+                    "编程",
+                    "Python",
+                    "python",
+                    "Rust",
+                    "rust",
+                    "Java",
+                    "JavaScript",
+                    "TypeScript",
+                    "Linux",
+                    "入门",
+                    "指南",
+                    "实战",
+                    "架构",
+                    "算法",
+                    "数据库",
+                    "手册",
+                    "教程",
+                ],
+            ) {
+                return "技术".into();
+            }
+            return "文档".into();
+        }
+        _ => {}
+    }
+    for (category, keywords) in [
+        (
+            "技术",
+            &[
+                "编程",
+                "Python",
+                "Rust",
+                "Java",
+                "JavaScript",
+                "TypeScript",
+                "Linux",
+                "入门",
+                "指南",
+                "实战",
+                "架构",
+                "算法",
+                "数据库",
+                "手册",
+                "教程",
+            ][..],
+        ),
+        (
+            "玄幻",
+            &[
+                "玄幻",
+                "斗破",
+                "大道",
+                "万古",
+                "遮天",
+                "完美世界",
+                "仙逆",
+                "武动",
+                "修罗",
+                "帝尊",
+            ][..],
+        ),
+        (
+            "都市",
+            &[
+                "都市", "重生", "官", "商途", "校花", "兵王", "赘婿", "神医", "逆袭",
+            ][..],
+        ),
+        (
+            "历史",
+            &[
+                "历史",
+                "大明",
+                "大唐",
+                "大秦",
+                "三国",
+                "宋朝",
+                "明朝",
+                "清朝",
+                "战国",
+                "隋唐",
+                "那些事儿",
+            ][..],
+        ),
+        ("武侠", &["武侠", "江湖", "剑客", "侠", "金庸", "古龙"][..]),
+        (
+            "科幻",
+            &[
+                "科幻", "星际", "末世", "三体", "星球", "机甲", "宇宙", "未来",
+            ][..],
+        ),
+        ("言情", &["言情", "总裁", "宠婚", "娇妻", "甜宠", "婚"][..]),
+        (
+            "悬疑",
+            &["悬疑", "推理", "侦探", "刑侦", "犯罪", "密室", "罪案"][..],
+        ),
+    ] {
+        if matches_keyword(title, keywords) {
+            return category.into();
+        }
+    }
+    String::new()
+}
+
+fn matches_keyword(text: &str, keywords: &[&str]) -> bool {
+    keywords.iter().any(|k| text.contains(k))
 }
 
 pub fn kind_str(kind: FormatKind) -> &'static str {
@@ -240,6 +422,7 @@ fn query_file_by_sha(conn: &Connection, sha: &str) -> Result<Option<ExistingRow>
 fn insert_work_tree(
     conn: &mut Connection,
     title: &str,
+    category: &str,
     parsed: &ParsedBook,
     stored_path: &Path,
     _is_dir: bool,
@@ -253,8 +436,8 @@ fn insert_work_tree(
         .unwrap_or(0);
     let tx = conn.transaction().map_err(|e| e.to_string())?;
     tx.execute(
-        "INSERT INTO works (id, title, authors, description, language, identifiers, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+        "INSERT INTO works (id, title, authors, description, language, identifiers, category, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
         rusqlite::params![
             work_id,
             title,
@@ -270,6 +453,7 @@ fn insert_work_tree(
                     .collect::<std::collections::BTreeMap<String, String>>()
             )
             .unwrap_or_else(|_| "{}".into()),
+            category,
             now
         ],
     )
@@ -300,7 +484,7 @@ fn insert_work_tree(
     Ok(file_id)
 }
 
-fn work_id_of(conn: &Connection, file_id: &str) -> Option<String> {
+pub(crate) fn work_id_of(conn: &Connection, file_id: &str) -> Option<String> {
     let mut stmt = conn
         .prepare(
             "SELECT e.work_id FROM editions e JOIN book_files f ON f.edition_id = e.id WHERE f.id = ?1",
@@ -376,5 +560,70 @@ mod tests {
             )
             .unwrap();
         assert_eq!((w, e, f), (1, 1, 1));
+    }
+
+    #[test]
+    fn classify_matches_format_and_title_keywords() {
+        assert_eq!(classify("斗破苍穹", "txt"), "玄幻");
+        assert_eq!(classify("明朝那些事儿", "epub"), "历史");
+        assert_eq!(classify("三体", "txt"), "科幻");
+        assert_eq!(classify("Rust 编程指南", "pdf"), "技术");
+        assert_eq!(classify("某会议论文", "pdf"), "文档");
+        assert_eq!(classify("一拳超人", "cbz"), "漫画");
+        assert_eq!(classify("军刀出鞘", "txt"), ""); // 未命中 → 未分类
+        assert_eq!(classify("重返都市当兵王", "txt"), "都市");
+    }
+
+    #[test]
+    fn set_work_category_roundtrip_and_validate() {
+        ensure_samples();
+        let tmp = tempfile::tempdir().unwrap();
+        let mut conn = db::open(tmp.path()).unwrap();
+        let lib = Library::new(tmp.path());
+        let res = lib
+            .import(&mut conn, &ws_samples("txt/utf8-chapters.txt"))
+            .unwrap();
+        let work_id = work_id_of(&conn, &res.file_id).unwrap();
+        set_work_category(&conn, &work_id, "玄幻").unwrap();
+        let cat: String = conn
+            .query_row(
+                "SELECT category FROM works WHERE id = ?1",
+                [&work_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(cat, "玄幻");
+        set_work_category(&conn, &work_id, "").unwrap(); // 未分类
+        assert!(set_work_category(&conn, &work_id, "不存在的类").is_err());
+    }
+
+    #[test]
+    fn save_cover_bytes_registers_and_validates() {
+        ensure_samples();
+        let tmp = tempfile::tempdir().unwrap();
+        let mut conn = db::open(tmp.path()).unwrap();
+        let lib = Library::new(tmp.path());
+        let res = lib
+            .import(&mut conn, &ws_samples("txt/utf8-chapters.txt"))
+            .unwrap();
+        // 非法格式被拒绝
+        assert!(
+            lib.save_cover_bytes(&conn, &res.file_id, b"x", "exe")
+                .is_err()
+        );
+        // 合法 PNG 登记成功
+        let png = [0x89u8, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4];
+        lib.save_cover_bytes(&conn, &res.file_id, &png, "png")
+            .unwrap();
+        let cover: String = conn
+            .query_row(
+                "SELECT COALESCE(cover_file, '') FROM works WHERE id = ( \
+                   SELECT e.work_id FROM editions e JOIN book_files f ON f.edition_id = e.id WHERE f.id = ?1 )",
+                [&res.file_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(cover.ends_with(&format!("{}.png", res.file_id)));
+        assert!(std::path::Path::new(&cover).exists());
     }
 }

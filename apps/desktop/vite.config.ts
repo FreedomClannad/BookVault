@@ -9,6 +9,17 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(() => ({
   plugins: [react(), tailwindcss()],
 
+  // decoy.html 是「快速隐藏」的伪装界面：纯静态、与主应用无共享代码，
+  // 多页构建保证它进入 dist，供 Rust 侧 WebviewUrl::App("decoy.html") 加载
+  build: {
+    rollupOptions: {
+      input: {
+        main: "index.html",
+        decoy: "decoy.html",
+      },
+    },
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

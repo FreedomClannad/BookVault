@@ -1,30 +1,33 @@
 /**
- * PDF 阅读器：pdf.js 前端渲染（ADR-002），页码进度模型 { type: "page", pageIndex }。
+ * PDF 正文视图：pdf.js 前端渲染（ADR-002）。
+ * 沉浸式改造后不含工具栏：当前页与缩放由 Reader 层受控，进度由 Reader 落库。
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as pdfjs from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { api, type ReadingLocation } from "../../app/api";
+import { api } from "../../app/api";
+import type { ReadingPrefs } from "./readingPrefs";
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
 interface Props {
   fileId: string;
-  pages: number;
   toc: { title: string; page: number }[];
-  initial: ReadingLocation | null;
-  onProgress: (loc: ReadingLocation) => void;
+  /** 受控当前页（0 起） */
+  page: number;
+  scale: number;
+  prefs: ReadingPrefs;
 }
 
-export function PdfReader({ fileId, pages, toc, initial, onProgress }: Props) {
-  const initPage = initial?.type === "page" ? initial.pageIndex : 0;
-  const [pageNum, setPageNum] = useState(() => Math.min(initPage, Math.max(0, pages - 1)));
-  const [scale, setScale] = useState(1.2);
+export function PdfReader({ fileId, toc, page, scale, prefs }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const docRef = useRef<pdfjs.PDFDocumentProxy | null>(null);
   const taskRef = useRef<pdfjs.PDFDocumentLoadingTask | null>(null);
+  const renderTaskRef = useRef<pdfjs.RenderTask | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // 文档异步加载完成后触发首次渲染（渲染 effect 依赖它）
+  const [docReady, setDocReady] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -39,6 +42,7 @@ export function PdfReader({ fileId, pages, toc, initial, onProgress }: Props) {
           return;
         }
         docRef.current = doc;
+        setDocReady((n) => n + 1);
       })
       .catch((e) => setError(String(e)));
     return () => {
@@ -47,93 +51,54 @@ export function PdfReader({ fileId, pages, toc, initial, onProgress }: Props) {
     };
   }, [fileId]);
 
-  // 渲染当前页
+  // 渲染当前页（快速翻页时取消上一次未完成的渲染，避免旧页覆盖新页）
   useEffect(() => {
     const doc = docRef.current;
     const canvas = canvasRef.current;
     if (!doc || !canvas) return;
     let cancelled = false;
     void doc
-      .getPage(pageNum + 1)
-      .then((page) => {
+      .getPage(page + 1)
+      .then((pg) => {
         if (cancelled) return;
-        const viewport = page.getViewport({ scale });
+        const viewport = pg.getViewport({ scale });
         canvas.width = viewport.width;
         canvas.height = viewport.height;
         const ctx = canvas.getContext("2d");
         if (!ctx) return;
-        void page.render({ canvas, canvasContext: ctx, viewport }).promise;
+        renderTaskRef.current?.cancel();
+        const renderTask = pg.render({ canvas, canvasContext: ctx, viewport });
+        renderTaskRef.current = renderTask;
+        return renderTask.promise;
       })
-      .catch((e) => setError(String(e)));
+      .catch((e) => {
+        // 渲染被新任务取消属正常流程，不当作错误
+        if (!cancelled && !String(e).toLowerCase().includes("cancel")) setError(String(e));
+      });
     return () => {
       cancelled = true;
     };
-  }, [pageNum, scale]);
+  }, [page, scale, docReady]);
 
-  useEffect(() => {
-    onProgress({ type: "page", pageIndex: pageNum });
-  }, [pageNum, onProgress]);
-
-  const go = useCallback(
-    (delta: number) => setPageNum((p) => Math.min(pages - 1, Math.max(0, p + delta))),
-    [pages],
-  );
-
-  useEffect(() => {
-    const h = (e: KeyboardEvent) => {
-      if (e.key === "ArrowRight" || e.key === " ") go(1);
-      if (e.key === "ArrowLeft") go(-1);
-    };
-    window.addEventListener("keydown", h);
-    return () => window.removeEventListener("keydown", h);
-  }, [go]);
+  const currentToc =
+    toc.length > 0 ? [...toc].reverse().find((t) => t.page <= page + 1) : undefined;
 
   if (error) {
     return (
-      <div className="mx-auto flex max-w-[420px] flex-1 flex-col items-center justify-center gap-3.5 px-8 text-center leading-relaxed text-danger">
-        <div>PDF 渲染失败: {error}</div>
+      <div className="flex min-h-0 flex-1 items-center justify-center">
+        <div className="max-w-[420px] px-8 text-center leading-relaxed text-danger">
+          PDF 渲染失败: {error}
+        </div>
       </div>
     );
   }
 
   return (
-    <>
-      <div className="flex flex-none items-center gap-2 border-b border-line bg-paper-raised px-5 py-2.5">
-        <button className="btn" onClick={() => go(-1)}>
-          ←
-        </button>
-        <span className="ml-auto whitespace-nowrap text-xs text-muted">
-          {pageNum + 1}/{pages}
-        </span>
-        <button className="btn" onClick={() => go(1)}>
-          →
-        </button>
-        <button className="btn" onClick={() => setScale((s) => Math.max(0.5, s - 0.2))}>
-          -
-        </button>
-        <span className="ml-auto whitespace-nowrap text-xs text-muted">
-          {Math.round(scale * 100)}%
-        </span>
-        <button className="btn" onClick={() => setScale((s) => Math.min(4, s + 0.2))}>
-          +
-        </button>
-        {toc.length > 0 && (
-          <select
-            onChange={(e) => setPageNum(Number(e.target.value) - 1)}
-            value={pageNum + 1}
-            className="input"
-          >
-            {toc.map((t, i) => (
-              <option key={i} value={t.page}>
-                {t.title}（p{t.page}）
-              </option>
-            ))}
-          </select>
-        )}
-      </div>
-      <div className="flex flex-1 justify-center overflow-auto bg-reading">
-        <canvas ref={canvasRef} />
-      </div>
-    </>
+    <div
+      className="flex min-h-0 flex-1 justify-center overflow-auto"
+      style={{ background: prefs.theme.bg }}
+    >
+      <canvas ref={canvasRef} aria-label={currentToc ? currentToc.title : undefined} />
+    </div>
   );
 }

@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>工作笔记</title>
+    <style>
+      :root {
+        color-scheme: light;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family:
+          -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+        background: #f6f5f1;
+        color: #37352f;
+      }
+      .wrap {
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 52px 36px 90px;
+      }
+      h1 {
+        font-size: 22px;
+        margin: 0 0 6px;
+        font-weight: 600;
+      }
+      .date {
+        color: #9b9a97;
+        font-size: 13px;
+        margin-bottom: 30px;
+      }
+      h2 {
+        font-size: 14px;
+        color: #8a8a86;
+        margin: 30px 0 10px;
+        border-left: 3px solid #5b84b1;
+        padding-left: 9px;
+        font-weight: 500;
+      }
+      ul {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+      }
+      li {
+        padding: 10px 2px;
+        border-bottom: 1px dashed #e3e0d8;
+        font-size: 14.5px;
+        display: flex;
+        gap: 10px;
+        align-items: baseline;
+      }
+      .mark {
+        color: #9b9a97;
+        flex: none;
+      }
+      .done {
+        color: #b3b1ac;
+        text-decoration: line-through;
+      }
+      .tag {
+        font-size: 12px;
+        color: #5b84b1;
+        background: #edf3fa;
+        border-radius: 4px;
+        padding: 1px 7px;
+        margin-left: auto;
+        flex: none;
+      }
+      .box {
+        background: #fffdf8;
+        border: 1px solid #e8e4d9;
+        border-radius: 8px;
+        padding: 16px 20px;
+        font-size: 14px;
+        line-height: 2;
+        color: #4a4a45;
+      }
+      .box .hl {
+        color: #b15b5b;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>工作笔记</h1>
+      <div class="date">最近更新：今天上午</div>
+
+      <h2>今日待办</h2>
+      <ul>
+        <li>
+          <span class="mark">☑</span><span class="done">09:30 站会，同步上周进展与本周计划</span
+          ><span class="tag">已完成</span>
+        </li>
+        <li>
+          <span class="mark">☑</span><span class="done">把 Q4 项目排期表发给项目组</span
+          ><span class="tag">已完成</span>
+        </li>
+        <li><span class="mark">☐</span><span>回复供应商关于交期的邮件</span></li>
+        <li><span class="mark">☐</span><span>整理周四评审会材料（10 页以内）</span></li>
+        <li><span class="mark">☐</span><span>下班前提交本周报销单</span></li>
+      </ul>
+
+      <h2>本周备忘</h2>
+      <ul>
+        <li>
+          <span class="mark">·</span><span>周三 14:00 需求评审会（3F 会议室），带笔记本</span>
+        </li>
+        <li><span class="mark">·</span><span>服务器续费 11 月 2 日截止，找行政走流程</span></li>
+        <li><span class="mark">·</span><span>新同事入职引导文档还没写完，本周补上</span></li>
+      </ul>
+
+      <h2>随手记</h2>
+      <div class="box">
+        接口联调比预期慢了一天，主要卡在鉴权参数的传递方式上。下周把公共请求层抽出来，统一处理 token
+        刷新和错误码，避免每个页面各写一遍。<span class="hl">注意：</span
+        >改动前先和后端确认字段命名，上次就是吃了这个亏。
+      </div>
+    </div>
+  </body>
+</html>

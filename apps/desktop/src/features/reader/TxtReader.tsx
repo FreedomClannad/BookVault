@@ -1,35 +1,111 @@
 /**
- * TXT 阅读器：章节侧栏 + 正文（按需读取章节文本）+ 滚动进度。
- * 进度模型：{ type: "chapter", chapterId, progress(章内滚动比) }
+ * TXT 正文视图：滚动 / 分页 / 竖排三模式 + 翻页动画（ui-style §3）。
+ *
+ * 分页引擎（含竖排 vertical-rl 与对页）：正文在固定高度容器内按列宽做 CSS 多列，
+ * 一屏一列（对页两列），翻页 = 容器平移一个 step；纯几何计算在
+ * @bookvault/shared/pagination（有单测，未来移动端复用）。版心宽度按每行约
+ * 36 字封顶，不随窗口拉长。
+ *
+ * 竖排注意（实测 Chromium/WebView2，2026-10）：vertical-rl 的文字渲染正确
+ * （上→下、列自右向左），但多列分片沿**纵轴向下**堆叠——scrollHeight 随分片
+ * 增长而 scrollWidth 不变，与 CSS 多列规范的「沿块轴（水平）分列」不符。
+ * 因此竖排的分页轴取 Y（translateY 向上翻），屏数由 scrollHeight 量测；
+ * 若未来引擎改回规范行为，需同步调整这里的量测与平移轴。竖排暂不支持对页。
+ *
+ * 翻页动画：slide = 基层 transform 过渡；cover = 目标页整屏滑入盖住当前页
+ * （副本面板，CoverSheet）；none = 直切。程序化跳页（恢复进度/章节切换/排版
+ * 变化重排）一律不播动画。
+ *
+ * 进度统一为章内 0..1 比例：滚动模式沿用滚动比，分页模式屏号↔比例互转
+ * （shared），进度模型与存储不变（ADR-003）。沉浸式不含工具栏：章节、页码、
+ * 排版全部由 Reader 层受控（ADR-002）。
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type ChapterDto, type ReadingLocation } from "../../app/api";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
+import { COLUMN_GAP, columnCount, sheetCount, sheetGeometry, sheetOffset } from "@bookvault/shared";
+import { api, type ReadingLocation } from "../../app/api";
+import { FONT_SANS, FONT_SERIF, type ReadingPrefs } from "./readingPrefs";
+
+/** 版心内边距：列文字到「纸边」的留白（分页/竖排模式） */
+const TEXT_PAD = 12;
+/** 版心上下留白：通过整体压缩列高实现，保证每一列一致 */
+const VPAD = 28;
 
 interface Props {
   fileId: string;
-  chapters: ChapterDto[];
+  chapterId: string;
+  /** 打开时携带的保存进度；仅滚动模式用于恢复章内位置（分页模式由 Reader 换算屏号下发） */
   initial: ReadingLocation | null;
+  prefs: ReadingPrefs;
   onProgress: (loc: ReadingLocation) => void;
+  /** 分页/竖排：受控屏号（0 基）；滚动模式忽略 */
+  page: number;
+  /** 对页开关（仅横排分页生效；竖排分片沿纵轴堆叠，双页并排不适用） */
+  spread: boolean;
+  /** 布局量测后上报屏数（Reader 据此做页码导航与进度换算） */
+  onPageCount: (sheets: number) => void;
+  /** 程序化跳页序号：恢复进度/切章/TOC 跳转时递增，本次 page 变化不播动画 */
+  navSeq: number;
+  /** 自动滚动速度 px/s（仅滚动模式；0=关闭） */
+  autoScrollPx: number;
+  /** 滚动模式自动滚到章末时回调（Reader 决定续章或停止） */
+  onAutoEnd?: () => void;
 }
 
-export function TxtReader({ fileId, chapters, initial, onProgress }: Props) {
+export function TxtReader({
+  fileId,
+  chapterId,
+  initial,
+  prefs,
+  onProgress,
+  page,
+  spread,
+  onPageCount,
+  navSeq,
+  autoScrollPx,
+  onAutoEnd,
+}: Props) {
   const init = initial?.type === "chapter" ? initial : null;
-  const [currentId, setCurrentId] = useState(() => init?.chapterId ?? chapters[0]?.id ?? "");
   const [text, setText] = useState("");
-  const [fontSize, setFontSize] = useState(() =>
-    Number(localStorage.getItem("reader.fontSize") ?? 18),
-  );
+  const paged = prefs.pageMode !== "scroll";
+  const vertical = prefs.pageMode === "vertical";
+
+  // ---- 滚动模式 ----
   const paneRef = useRef<HTMLDivElement>(null);
-  const currentIdRef = useRef(currentId);
-  currentIdRef.current = currentId;
   const restoredRef = useRef(false);
+
+  // ---- 分页/竖排模式 ----
+  const clipRef = useRef<HTMLDivElement>(null);
+  const translatorRef = useRef<HTMLDivElement>(null);
+  const [clipW, setClipW] = useState(0);
+  const [geom, setGeom] = useState<{ columnWidth: number; step: number }>({
+    columnWidth: 0,
+    step: 0,
+  });
+  /** 竖排分页步长（分片高 + 缝），由量测得出；横排用 geom.step */
+  const [axisStep, setAxisStep] = useState(0);
+  const [cover, setCover] = useState<{ dir: 1 | -1; overlayPage: number; seq: number } | null>(
+    null,
+  );
+  const coverSeq = useRef(0);
+  const onPageCountRef = useRef(onPageCount);
+  onPageCountRef.current = onPageCount;
+  const onAutoEndRef = useRef(onAutoEnd);
+  onAutoEndRef.current = onAutoEnd;
 
   // 加载章节内容（按需读取，不整本载入——ADR-002）
   useEffect(() => {
     let cancelled = false;
+    setText("");
     void api
-      .getResource(fileId, currentId)
+      .getResource(fileId, chapterId)
       .then((bytes) => {
         if (!cancelled) setText(new TextDecoder().decode(bytes));
       })
@@ -39,102 +115,305 @@ export function TxtReader({ fileId, chapters, initial, onProgress }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [fileId, currentId]);
+  }, [fileId, chapterId]);
 
-  // 进度上报（节流由 Reader 层负责）
+  // 滚动模式：仅初次挂载且保存进度的章节与当前一致时恢复章内位置；切章回顶
+  useEffect(() => {
+    if (paged) return;
+    const pane = paneRef.current;
+    if (!pane || !text) return;
+    if (!restoredRef.current && init && init.chapterId === chapterId) {
+      if (pane.scrollHeight > pane.clientHeight) {
+        pane.scrollTop = init.progress * (pane.scrollHeight - pane.clientHeight);
+        restoredRef.current = true;
+      }
+      return;
+    }
+    pane.scrollTop = 0;
+  }, [text, chapterId, init, paged]);
+
+  // 滚动模式进度上报（节流由 Reader 层负责）
   const reportScroll = useCallback(() => {
     const pane = paneRef.current;
     if (!pane) return;
     const ratio = pane.scrollTop / Math.max(1, pane.scrollHeight - pane.clientHeight);
     onProgress({
       type: "chapter",
-      chapterId: currentIdRef.current,
+      chapterId,
       progress: Math.min(1, Math.max(0, ratio)),
     });
-  }, [onProgress]);
+  }, [chapterId, onProgress]);
 
-  // 恢复章内滚动位置（仅首次）
+  // 自动滚动（仅滚动模式）：rAF 匀速下滚；到底回调 onAutoEnd（Reader 续章或停止）。
+  // 程序化 scrollTop 会触发 scroll 事件 → 进度经 reportScroll 正常上报。
   useEffect(() => {
-    if (restoredRef.current || !init || paneRef.current?.scrollHeight === 0) return;
-    const pane = paneRef.current;
-    if (pane && pane.scrollHeight > pane.clientHeight) {
-      pane.scrollTop = init.progress * (pane.scrollHeight - pane.clientHeight);
-      restoredRef.current = true;
+    if (paged || autoScrollPx <= 0) return;
+    let raf = 0;
+    let last = performance.now();
+    const tick = (t: number) => {
+      const pane = paneRef.current;
+      if (!pane) return;
+      const max = pane.scrollHeight - pane.clientHeight;
+      if (pane.scrollTop >= max - 0.5) {
+        onAutoEndRef.current?.();
+        return;
+      }
+      pane.scrollTop = Math.min(max, pane.scrollTop + (autoScrollPx * (t - last)) / 1000);
+      last = t;
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [paged, autoScrollPx, chapterId]);
+
+  // ---- 分页几何 ----
+  // 视口宽度：ResizeObserver 跟随窗口/布局变化
+  useEffect(() => {
+    if (!paged) return;
+    const clip = clipRef.current;
+    if (!clip) return;
+    const update = () => setClipW(clip.clientWidth);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(clip);
+    return () => ro.disconnect();
+  }, [paged]);
+
+  // 几何（列宽/步长）：视口、字号、对页任一变化即重算；值不变时保持引用稳定
+  useEffect(() => {
+    if (!paged || !text || clipW <= 0) return;
+    const g = sheetGeometry(clipW - TEXT_PAD * 2, prefs.fontSize, spread);
+    if (g.columnWidth <= 0) return;
+    setGeom((prev) => (prev.columnWidth === g.columnWidth && prev.step === g.step ? prev : g));
+  }, [paged, text, clipW, prefs.fontSize, spread]);
+
+  // 内容量测：几何落地到 DOM 后才能数列（scrollWidth 反映新列宽）；字体就绪后补测一次
+  useEffect(() => {
+    if (!paged || !text || geom.columnWidth <= 0) return;
+    const tr = translatorRef.current;
+    if (!tr) return;
+    const count = () => {
+      if (vertical) {
+        // 竖排：分片向下堆叠（见文件头实测注），片高 = 容器 clientHeight
+        const fragH = tr.clientHeight;
+        const stepY = fragH + COLUMN_GAP;
+        setAxisStep((prev) => (prev === stepY ? prev : stepY));
+        onPageCountRef.current(Math.max(1, columnCount(tr.scrollHeight, fragH, COLUMN_GAP)));
+      } else {
+        const cols = columnCount(tr.scrollWidth, Math.floor(geom.columnWidth), COLUMN_GAP);
+        onPageCountRef.current(sheetCount(cols, spread));
+      }
+    };
+    count();
+    let cancelled = false;
+    void document.fonts?.ready.then(() => {
+      if (!cancelled) count();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [paged, text, geom, spread, vertical]);
+
+  // ---- 翻页动画编排 ----
+  // animate 在「渲染期」由上一次提交的导航状态推导（基层 transform 的过渡必须在
+  // 变化那一帧就位）；上一次提交的值随后在 effect 里回写。
+  const stepNow = vertical ? axisStep : geom.step;
+  const geomKey = `${geom.columnWidth}|${geom.step}|${axisStep}|${vertical}`;
+  const prevNavRef = useRef({ page, navSeq, geomKey });
+  const programmatic =
+    navSeq !== prevNavRef.current.navSeq || geomKey !== prevNavRef.current.geomKey;
+  const animate = !programmatic && page !== prevNavRef.current.page && stepNow > 0;
+
+  // 覆盖动画触发（slide/none 由基层 transition 自然呈现）：程序化跳页时撤掉进行中的覆盖层
+  useEffect(() => {
+    const prev = prevNavRef.current;
+    const prog = navSeq !== prev.navSeq || geomKey !== prev.geomKey;
+    const changed = page !== prev.page;
+    if (!prog && changed && prefs.anim === "cover" && stepNow > 0) {
+      const dir: 1 | -1 = page > prev.page ? 1 : -1;
+      coverSeq.current += 1;
+      setCover({ dir, overlayPage: dir > 0 ? page : prev.page, seq: coverSeq.current });
+    } else {
+      setCover((c) => (c ? null : c));
     }
-  }, [text, init]);
+  }, [page, navSeq, geomKey, prefs.anim, stepNow]);
 
-  const switchChapter = useCallback(
-    (id: string) => {
-      setCurrentId(id);
-      restoredRef.current = false;
-      onProgress({ type: "chapter", chapterId: id, progress: 0 });
-      paneRef.current?.scrollTo({ top: 0 });
-    },
-    [onProgress],
-  );
+  useEffect(() => {
+    prevNavRef.current = { page, navSeq, geomKey };
+  }, [page, navSeq, geomKey]);
 
-  // 字号持久化（M2.12 设置存储的阅读器部分）
-  const changeFont = (size: number) => {
-    setFontSize(size);
-    localStorage.setItem("reader.fontSize", String(size));
+  const sheetW = geom.step > 0 ? geom.step - COLUMN_GAP : 0;
+  // 横排内容向右溢出、竖排（实测）向下堆叠：翻页都朝「内容伸展的反方向」平移
+  const offset = sheetOffset(page, stepNow);
+  const translate = `translate${vertical ? "Y" : "X"}(${-offset}px)`;
+
+  const bodyStyle: CSSProperties = {
+    color: prefs.theme.fg,
+    fontSize: prefs.fontSize,
+    lineHeight: prefs.lineHeight,
+    fontFamily: prefs.serif ? FONT_SERIF : FONT_SANS,
+    textAlign: "justify",
+    whiteSpace: "pre-wrap",
   };
 
-  const idx = chapters.findIndex((c) => c.id === currentId);
+  /** 多列容器基础样式；transform/transition 由调用方补（基层动画与覆盖层不同） */
+  const basePageStyle: CSSProperties = {
+    ...bodyStyle,
+    height: `calc(100% - ${VPAD * 2}px)`,
+    marginTop: VPAD,
+    width: "100%",
+    columnWidth: `${Math.max(1, Math.floor(geom.columnWidth))}px`,
+    columnGap: `${COLUMN_GAP}px`,
+    columnFill: "auto",
+    writingMode: vertical ? "vertical-rl" : "horizontal-tb",
+  };
+
+  const contentNode = <>{text}</>;
+
+  if (!paged) {
+    return (
+      <div
+        className="min-h-0 flex-1 overflow-auto"
+        style={{ background: prefs.theme.bg }}
+        ref={paneRef}
+        onScroll={reportScroll}
+      >
+        {text ? (
+          <div
+            className="mx-auto max-w-[40em] whitespace-pre-wrap px-7 pb-[120px] pt-10 text-justify"
+            style={bodyStyle}
+          >
+            {contentNode}
+          </div>
+        ) : (
+          <LoadingHint muted={prefs.theme.muted} />
+        )}
+      </div>
+    );
+  }
 
   return (
-    <>
-      <div
-        className="flex flex-none items-center gap-2 border-b border-line bg-paper-raised px-5 py-2.5"
-        style={{ flex: "0 0 auto" }}
-      >
-        <button
-          className="btn"
-          disabled={idx <= 0}
-          onClick={() => idx > 0 && switchChapter(chapters[idx - 1].id)}
-        >
-          ← 上一章
-        </button>
-        <button
-          disabled={idx < 0 || idx >= chapters.length - 1}
-          onClick={() => idx < chapters.length - 1 && switchChapter(chapters[idx + 1].id)}
-        >
-          下一章 →
-        </button>
-        <button className="btn" onClick={() => changeFont(Math.max(14, fontSize - 2))}>
-          A-
-        </button>
-        <button className="btn" onClick={() => changeFont(Math.min(28, fontSize + 2))}>
-          A+
-        </button>
-        <span className="ml-auto whitespace-nowrap text-xs text-muted">
-          {idx + 1}/{chapters.length} {chapters[idx]?.title ?? ""}
-        </span>
-      </div>
-      <div className="flex min-h-0 flex-1">
-        <div className="w-[236px] flex-none overflow-auto border-r border-line bg-paper p-2.5">
-          {chapters.map((c) => (
-            <button
-              key={c.id}
-              className={`block w-full truncate rounded-r-md border-l-2 border-l-transparent py-2 pl-3 pr-3 text-left text-[13px] text-muted hover:border-l-line hover:bg-paper-raised hover:text-fg ${c.id === currentId ? "border-l-seal bg-paper-raised font-medium text-accent-strong" : ""}`}
-              onClick={() => switchChapter(c.id)}
-            >
-              {c.title ?? c.id}
-            </button>
-          ))}
-        </div>
+    <div className="min-h-0 flex-1" style={{ background: prefs.theme.bg }}>
+      <div className="flex h-full justify-center">
         <div
-          className="flex-1 overflow-auto bg-reading text-reading-fg"
-          ref={paneRef}
-          onScroll={reportScroll}
+          ref={clipRef}
+          className="relative h-full overflow-hidden"
+          style={{ width: sheetW > 0 ? sheetW + TEXT_PAD * 2 : "100%", padding: `0 ${TEXT_PAD}px` }}
         >
-          <div
-            className="mx-auto max-w-[40em] whitespace-pre-wrap px-7 pb-[120px] pt-10 text-justify first-letter:font-display first-letter:text-[1.9em] first-letter:leading-none first-letter:text-accent-strong"
-            style={{ ["--reader-font-size" as string]: `${fontSize}px` }}
-          >
-            {text}
-          </div>
+          {text ? (
+            <div
+              ref={translatorRef}
+              style={{
+                ...basePageStyle,
+                transform: translate,
+                transition:
+                  animate && prefs.anim === "slide"
+                    ? `transform ${prefs.animSpeed}ms cubic-bezier(0.25, 0.1, 0.25, 1)`
+                    : "none",
+              }}
+            >
+              {contentNode}
+            </div>
+          ) : (
+            <LoadingHint muted={prefs.theme.muted} />
+          )}
+
+          {cover && text && stepNow > 0 && (
+            <CoverSheet
+              key={cover.seq}
+              dir={cover.dir}
+              page={cover.overlayPage}
+              step={stepNow}
+              vertical={vertical}
+              durationMs={prefs.animSpeed}
+              bg={prefs.theme.bg}
+              basePageStyle={basePageStyle}
+              onDone={() => setCover(null)}
+            >
+              {contentNode}
+            </CoverSheet>
+          )}
         </div>
       </div>
-    </>
+    </div>
+  );
+}
+
+/**
+ * 覆盖翻页的滑入面板：整屏展示目标页（副本），从前进方向滑入（前进）或
+ * 滑出（后退）盖住/露出基层——横排从右缘、竖排从下缘进出。双 rAF 确保初始
+ * 位置先绘制再过渡。
+ */
+function CoverSheet({
+  dir,
+  page,
+  step,
+  vertical,
+  durationMs,
+  bg,
+  basePageStyle,
+  onDone,
+  children,
+}: {
+  dir: 1 | -1;
+  page: number;
+  step: number;
+  vertical: boolean;
+  durationMs: number;
+  bg: string;
+  basePageStyle: CSSProperties;
+  onDone: () => void;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
+  const ax = vertical ? "Y" : "X";
+  const startT = dir > 0 ? step : 0;
+  const endT = dir > 0 ? 0 : step;
+  const innerT = -page * step;
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        el.style.transition = `transform ${durationMs}ms ease`;
+        el.style.transform = `translate${ax}(${endT}px)`;
+      });
+    });
+    const timer = setTimeout(() => onDoneRef.current(), durationMs + 160);
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+      clearTimeout(timer);
+    };
+  }, [durationMs, endT, ax]);
+
+  return (
+    <div
+      ref={ref}
+      className="absolute inset-0 z-10 overflow-hidden"
+      style={{
+        background: bg,
+        transform: `translate${ax}(${startT}px)`,
+        boxShadow: "0 0 22px rgb(0 0 0 / 0.16)",
+      }}
+    >
+      <div
+        style={{ ...basePageStyle, transform: `translate${ax}(${innerT}px)`, transition: "none" }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function LoadingHint({ muted }: { muted: string }) {
+  return (
+    <div className="flex h-[50vh] items-center justify-center text-sm" style={{ color: muted }}>
+      正在加载章节…
+    </div>
   );
 }

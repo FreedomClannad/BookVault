@@ -1,20 +1,29 @@
 /**
- * EPUB 阅读器（M2 方案：iframe srcdoc + 资源内联）。
+ * EPUB 正文视图（M2 方案：iframe srcdoc + 资源内联）。
  * 章节 HTML 经 get_resource 取出 → 基本清理（去 script/on* 属性）→
- * 相对路径图片按 zip 路径解析后内联为 data URL → 注入排版 CSS。
+ * 相对路径图片按 zip 路径解析后内联为 data URL。
+ * 沉浸式改造后不含工具栏与章节侧栏：章节切换由 Reader 层受控；
+ * 排版（颜色/字号/行高/字体）在 iframe load 后动态注入 body style，
+ * 改偏好不重载 srcDoc、不丢滚动位置。
  * 进度模型：{ type: "chapter", chapterId(=zip href), progress(章内滚动比) }
  *
- * 已知限制（docs/formats/）：外部 CSS/字体不加载（P1 升级 foliate-js 渲染引擎时解决）。
+ * 已知限制（docs/formats/）：外部 CSS/字体不加载（P1 升级 foliate-js 渲染引擎时解决）；
+ * iframe 内的键盘事件不冒泡到父层，章节切换需用悬浮工具栏。
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, guessMime, toDataUrl, type ChapterDto, type ReadingLocation } from "../../app/api";
+import { FONT_SANS, FONT_SERIF, type ReadingPrefs } from "./readingPrefs";
 
 interface Props {
   fileId: string;
   chapters: ChapterDto[];
+  chapterId: string;
   initial: ReadingLocation | null;
+  prefs: ReadingPrefs;
   onProgress: (loc: ReadingLocation) => void;
+  /** iframe 内的鼠标活动（iframe 会吞掉父层 mousemove，需内部转发唤出悬浮工具栏） */
+  onActivity: () => void;
 }
 
 function zipDir(href: string): string {
@@ -34,10 +43,9 @@ function resolveZipPath(baseDir: string, rel: string): string {
   return out.join("/");
 }
 
-const TYPO_CSS = `
-body { margin: 0; padding: 32px 24px 96px; max-width: 42em; margin: 0 auto;
-  font-size: 18px; line-height: 1.7; color: var(--reading-fg); background: transparent;
-  font-family: -apple-system, "PingFang SC", "Songti SC", "Noto Sans CJK SC", sans-serif; }
+/** 静态骨架：排版值一律由 applyTypo 动态注入，避免改偏好时重载文档 */
+const typoCss = `
+body { margin: 0 auto; padding: 32px 24px 96px; max-width: 40em; }
 img { max-width: 100%; }
 `;
 
@@ -68,16 +76,23 @@ async function inlineImages(html: string, chapterHref: string, fileId: string): 
   return out;
 }
 
-export function EpubReader({ fileId, chapters, initial, onProgress }: Props) {
+export function EpubReader({
+  fileId,
+  chapters,
+  chapterId,
+  initial,
+  prefs,
+  onProgress,
+  onActivity,
+}: Props) {
   const init = initial?.type === "chapter" ? initial : null;
-  const [currentId, setCurrentId] = useState(() => init?.chapterId ?? chapters[0]?.id ?? "");
   const [doc, setDoc] = useState<string>("");
   const frameRef = useRef<HTMLIFrameElement>(null);
-  const currentRef = useRef(currentId);
-  currentRef.current = currentId;
+  const chapterRef = useRef(chapterId);
+  chapterRef.current = chapterId;
   const restoredRef = useRef(false);
 
-  const chapter = useMemo(() => chapters.find((c) => c.id === currentId), [chapters, currentId]);
+  const chapter = useMemo(() => chapters.find((c) => c.id === chapterId), [chapters, chapterId]);
 
   useEffect(() => {
     if (!chapter) return;
@@ -91,7 +106,7 @@ export function EpubReader({ fileId, chapters, initial, onProgress }: Props) {
         html = await inlineImages(html, href, fileId);
         if (cancelled) return;
         setDoc(
-          `<!doctype html><html><head><meta charset="utf-8"><style>${TYPO_CSS}</style></head><body>${html}</body></html>`,
+          `<!doctype html><html><head><meta charset="utf-8"><style>${typoCss}</style></head><body>${html}</body></html>`,
         );
       })
       .catch(() => {
@@ -102,25 +117,41 @@ export function EpubReader({ fileId, chapters, initial, onProgress }: Props) {
     };
   }, [fileId, chapter]);
 
-  // iframe 内滚动进度
+  // 排版落到 iframe 正文：偏好变化即时生效，不重载 srcDoc（不丢滚动位置）
+  const applyTypo = useCallback(() => {
+    const win = frameRef.current?.contentWindow;
+    if (!win?.document.body) return;
+    const s = win.document.body.style;
+    s.color = prefs.theme.fg;
+    s.fontSize = `${prefs.fontSize}px`;
+    s.lineHeight = String(prefs.lineHeight);
+    s.fontFamily = prefs.serif ? FONT_SERIF : FONT_SANS;
+  }, [prefs]);
+
+  useEffect(() => {
+    applyTypo();
+  }, [applyTypo, doc]);
+
+  // iframe 内滚动进度 + 恢复位置
   useEffect(() => {
     const frame = frameRef.current;
     if (!frame) return;
     const onLoad = () => {
       const win = frame.contentWindow;
       if (!win) return;
+      applyTypo();
       const handler = () => {
         const doc2 = win.document.documentElement;
         const ratio = win.scrollY / Math.max(1, doc2.scrollHeight - win.innerHeight);
         onProgress({
           type: "chapter",
-          chapterId: currentRef.current,
+          chapterId: chapterRef.current,
           progress: Math.min(1, Math.max(0, ratio)),
         });
       };
       win.addEventListener("scroll", handler, { passive: true });
-      // 恢复位置
-      if (!restoredRef.current && init && init.chapterId === currentId) {
+      win.addEventListener("mousemove", onActivity, { passive: true });
+      if (!restoredRef.current && init && init.chapterId === chapterRef.current) {
         const doc2 = win.document.documentElement;
         win.scrollTo(0, init.progress * Math.max(0, doc2.scrollHeight - win.innerHeight));
         restoredRef.current = true;
@@ -128,61 +159,26 @@ export function EpubReader({ fileId, chapters, initial, onProgress }: Props) {
     };
     frame.addEventListener("load", onLoad);
     return () => frame.removeEventListener("load", onLoad);
-  }, [doc, init, currentId, onProgress]);
-
-  const switchChapter = useCallback(
-    (id: string) => {
-      setCurrentId(id);
-      restoredRef.current = false;
-      onProgress({ type: "chapter", chapterId: id, progress: 0 });
-    },
-    [onProgress],
-  );
-
-  const idx = chapters.findIndex((c) => c.id === currentId);
+  }, [doc, init, onProgress, applyTypo, onActivity]);
 
   return (
-    <>
-      <div className="flex flex-none items-center gap-2 border-b border-line bg-paper-raised px-5 py-2.5">
-        <button
-          className="btn"
-          disabled={idx <= 0}
-          onClick={() => idx > 0 && switchChapter(chapters[idx - 1].id)}
+    <div className="min-h-0 flex-1" style={{ background: prefs.theme.bg }}>
+      {doc ? (
+        <iframe
+          ref={frameRef}
+          className="h-full w-full border-none"
+          title="epub"
+          srcDoc={doc}
+          sandbox="allow-same-origin"
+        />
+      ) : (
+        <div
+          className="flex h-[50vh] items-center justify-center text-sm"
+          style={{ color: prefs.theme.muted }}
         >
-          ← 上一章
-        </button>
-        <button
-          disabled={idx < 0 || idx >= chapters.length - 1}
-          onClick={() => idx < chapters.length - 1 && switchChapter(chapters[idx + 1].id)}
-        >
-          下一章 →
-        </button>
-        <span className="ml-auto whitespace-nowrap text-xs text-muted">
-          {idx + 1}/{chapters.length} {chapter?.title ?? ""}
-        </span>
-      </div>
-      <div className="flex min-h-0 flex-1">
-        <div className="w-[236px] flex-none overflow-auto border-r border-line bg-paper p-2.5">
-          {chapters.map((c) => (
-            <button
-              key={c.id}
-              className={`block w-full truncate rounded-r-md border-l-2 border-l-transparent py-2 pl-3 pr-3 text-left text-[13px] text-muted hover:border-l-line hover:bg-paper-raised hover:text-fg ${c.id === currentId ? "border-l-seal bg-paper-raised font-medium text-accent-strong" : ""}`}
-              onClick={() => switchChapter(c.id)}
-            >
-              {c.title ?? c.id}
-            </button>
-          ))}
+          正在加载章节…
         </div>
-        <div className="flex-1 overflow-auto bg-reading text-reading-fg">
-          <iframe
-            ref={frameRef}
-            className="h-full w-full border-none bg-reading"
-            title="epub"
-            srcDoc={doc}
-            sandbox="allow-same-origin"
-          />
-        </div>
-      </div>
-    </>
+      )}
+    </div>
   );
 }

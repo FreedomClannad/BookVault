@@ -2,4 +2,5 @@ packages:
   - "apps/*"
   - "packages/*"
 allowBuilds:
-  esbuild: set this to true or false
+  # esbuild 的 postinstall 校验平台二进制；desktop 包 previously onlyBuiltDependencies 同意过
+  esbuild: true
