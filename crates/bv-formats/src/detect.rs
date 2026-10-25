@@ -45,13 +45,33 @@ fn find(haystack: &[u8], needle: &[u8]) -> bool {
 
 /// 综合探测：优先文件签名，扩展名仅作 TXT 的弱提示
 pub fn detect(src: &dyn BookSource, extension: Option<&str>) -> Result<DetectResult> {
+    // PDF 允许头部有少量垃圾（下载器包裹、合并文件）：%PDF- 出现在前 1KB 内即可
+    // （PDF 规范亦允许 %PDF- 之前有 junk）；xref 偏移由解析器自行容错
+    let pdf_head_len = 1024.min(src.size() as usize);
+    let pdf_head = src.read_range(0, pdf_head_len)?;
+    if find(&pdf_head, b"%PDF-") {
+        return Ok(DetectResult {
+            kind: FormatKind::Pdf,
+            confidence: if pdf_head.starts_with(b"%PDF-") {
+                0.99
+            } else {
+                0.85
+            },
+        });
+    }
+
     let head_len = 256.min(src.size() as usize);
     let head = src.read_range(0, head_len)?;
 
-    if head.starts_with(b"%PDF-") {
+    // UTF-16 BOM 是强签名（Windows 阅读器导出的小说常见）；UTF-32LE BOM
+    // 为 FF FE 00 00，需排除（UTF-32 文本不是支持的格式）
+    let utf16_bom = (head.starts_with(&[0xFF, 0xFE])
+        && !head.starts_with(&[0xFF, 0xFE, 0x00, 0x00]))
+        || head.starts_with(&[0xFE, 0xFF]);
+    if utf16_bom {
         return Ok(DetectResult {
-            kind: FormatKind::Pdf,
-            confidence: 0.99,
+            kind: FormatKind::Txt,
+            confidence: 0.95,
         });
     }
 
@@ -59,7 +79,32 @@ pub fn detect(src: &dyn BookSource, extension: Option<&str>) -> Result<DetectRes
         || head.starts_with(b"PK\x05\x06")
         || head.starts_with(b"PK\x07\x08");
     if is_zip {
-        // EPUB 规范要求 mimetype 为首个 STORED 条目，头部 256 字节内可见
+        if let Ok(zip) = crate::adapters::open_zip(src) {
+            // 按条目名区分（mimetype 压缩/不在文件头的 EPUB 用头部字节判不出）：
+            // EPUB = OPF 包描述或 container.xml；图片集 = CBZ；都不是则拒绝，
+            // 避免把 EPUB 误判成 0 页 CBZ 静默导入
+            let names = zip.entry_names();
+            let is_epub = names.iter().any(|n| {
+                n == "mimetype" || n.ends_with(".opf") || n.starts_with("META-INF/container.xml")
+            });
+            if is_epub {
+                return Ok(DetectResult {
+                    kind: FormatKind::Epub,
+                    confidence: 0.98,
+                });
+            }
+            if names
+                .iter()
+                .any(|n| crate::adapters::is_image_name(n.rsplit('/').next().unwrap_or(n)))
+            {
+                return Ok(DetectResult {
+                    kind: FormatKind::Cbz,
+                    confidence: 0.9,
+                });
+            }
+            return Err(ParseError::NotSupported);
+        }
+        // zip 打不开（损坏/超限）：退回头部启发式，让解析器给出具体错误
         if find(&head, b"mimetype") && find(&head, b"application/epub+zip") {
             return Ok(DetectResult {
                 kind: FormatKind::Epub,
@@ -154,5 +199,35 @@ mod tests {
 
         // 含 NUL 的二进制：即使扩展名 txt 也拒绝
         assert!(detect(&MemSource(vec![1, 2, 0, 4]), Some("txt")).is_err());
+    }
+
+    #[test]
+    fn utf16_bom_txt_is_supported() {
+        // UTF-16LE：BOM + 交错 NUL——Windows 阅读器导出的常见编码，不能当二进制垃圾拒绝
+        let mut le = vec![0xFF, 0xFE];
+        for u in "第一章 起点".encode_utf16() {
+            le.extend_from_slice(&u.to_le_bytes());
+        }
+        let r = detect(&MemSource(le), Some("txt")).unwrap();
+        assert_eq!(r.kind, FormatKind::Txt);
+
+        let mut be = vec![0xFE, 0xFF];
+        for u in "第二章 转折".encode_utf16() {
+            be.extend_from_slice(&u.to_be_bytes());
+        }
+        let r = detect(&MemSource(be), None).unwrap();
+        assert_eq!(r.kind, FormatKind::Txt);
+
+        // UTF-32LE BOM（FF FE 00 00）不是支持的格式
+        let utf32 = vec![0xFF, 0xFE, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00];
+        assert!(detect(&MemSource(utf32), Some("txt")).is_err());
+    }
+
+    #[test]
+    fn pdf_with_junk_prefix_is_detected() {
+        let mut junk = b"<html>saved by downloader\n".to_vec();
+        junk.extend_from_slice(b"%PDF-1.7\n1 0 obj\n");
+        let r = detect(&MemSource(junk), None).unwrap();
+        assert_eq!(r.kind, FormatKind::Pdf);
     }
 }

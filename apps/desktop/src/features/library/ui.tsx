@@ -133,3 +133,43 @@ export function MenuItem({ onClick, children }: { onClick: () => void; children:
     </button>
   );
 }
+
+/** 删除确认模态（批量整理与单本删除共用）：写明删除范围与不动的部分 */
+export function DeleteConfirmDialog({
+  title,
+  deleting,
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  deleting: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-6">
+      <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-label="确认删除"
+        className="w-full max-w-sm rounded-xl bg-paper-raised p-5 shadow-2"
+      >
+        <div className="mb-2 font-display text-[16px] font-semibold text-fg">{title}</div>
+        <p className="mb-1 text-[13px] leading-relaxed text-muted">
+          将删除书库记录与本地受管副本（含封面），阅读进度一并清除，此操作不可恢复。
+        </p>
+        <p className="mb-4 text-[13px] leading-relaxed text-muted">
+          导入时的原始文件不会被删除；已上传到 NAS 的内容不受影响。
+        </p>
+        <div className="flex justify-end gap-2.5">
+          <button className="btn" onClick={onCancel} disabled={deleting}>
+            取消
+          </button>
+          <button className="btn btn-danger" disabled={deleting} onClick={onConfirm}>
+            {deleting ? "删除中…" : "确认删除"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

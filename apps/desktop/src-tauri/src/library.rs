@@ -216,6 +216,77 @@ pub fn set_work_category(conn: &Connection, work_id: &str, category: &str) -> Re
     Ok(())
 }
 
+// ---------- 目录展开（拖文件夹 / 导入文件夹入口共用） ----------
+
+/// 视作书籍文件的扩展名（探测层仍按签名复核，这里只做初筛）
+const BOOK_EXTENSIONS: [&str; 5] = ["epub", "txt", "pdf", "cbz", "zip"];
+/// 目录递归深度上限（防异常深嵌套拖慢导入线程）
+const MAX_SCAN_DEPTH: usize = 8;
+
+/// 导入路径展开：文件原样保留；图片文件夹原样保留（整体作为一本漫画）；
+/// 其余目录递归收集其中的书籍文件（每文件一本书）。隐藏目录跳过，
+/// 符号链接不跟随（防环；导入语义是「复制原件」，链接不在此列）。
+/// 输出按路径排序，保证同一批导入的顺序确定（进度提示、测试均依赖）。
+pub fn expand_import_paths(paths: &[String]) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for raw in paths {
+        let p = Path::new(raw);
+        if p.is_dir() && !is_image_dir(p) {
+            collect_book_files(p, 0, &mut out);
+        } else {
+            out.push(p.to_path_buf());
+        }
+    }
+    out.sort();
+    out
+}
+
+fn is_image_dir(dir: &Path) -> bool {
+    bv_formats::adapters::image_dir::list_images(dir)
+        .map(|l| !l.is_empty())
+        .unwrap_or(false)
+}
+
+fn collect_book_files(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+    if depth > MAX_SCAN_DEPTH {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut files = Vec::new();
+    let mut subdirs = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if meta.is_symlink() {
+            continue;
+        }
+        if meta.is_dir() {
+            if !entry.file_name().to_string_lossy().starts_with('.') {
+                subdirs.push(path);
+            }
+        } else if meta.is_file() {
+            let supported = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| BOOK_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
+                .unwrap_or(false);
+            if supported {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    out.extend(files);
+    subdirs.sort();
+    for d in subdirs {
+        collect_book_files(&d, depth + 1, out);
+    }
+}
+
 /// 批量删除作品（书架「整理」入口）：事务内按 progress → files → editions → works
 /// 顺序清掉三层记录与进度，再清理磁盘文件。返回成功删除的作品数。
 ///
@@ -738,6 +809,43 @@ mod tests {
         assert_eq!(classify("一拳超人", "cbz"), "漫画");
         assert_eq!(classify("军刀出鞘", "txt"), ""); // 未命中 → 未分类
         assert_eq!(classify("重返都市当兵王", "txt"), "都市");
+    }
+
+    #[test]
+    fn expand_import_paths_flattens_book_folders() {
+        ensure_samples();
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        // 小说文件夹：递归收集子目录里的书目文件
+        std::fs::create_dir_all(root.join("novels/卷一")).unwrap();
+        std::fs::write(root.join("novels/书A.txt"), b"a").unwrap();
+        std::fs::write(root.join("novels/卷一/书B.txt"), b"b").unwrap();
+        std::fs::write(root.join("novels/忽略.exe"), b"x").unwrap();
+        std::fs::create_dir_all(root.join("novels/.hidden")).unwrap();
+        std::fs::write(root.join("novels/.hidden/隐藏.txt"), b"h").unwrap();
+        // 图片文件夹：整体保留为一本书，不展开
+        let manga = root.join("manga");
+        std::fs::create_dir_all(&manga).unwrap();
+        std::fs::write(manga.join("001.jpg"), b"fake").unwrap();
+        // 单文件与不存在路径原样保留（错误由导入层统一报告）
+        let single = root.join("single.epub");
+        std::fs::write(&single, b"e").unwrap();
+
+        let out = expand_import_paths(&[
+            root.join("novels").to_string_lossy().to_string(),
+            manga.to_string_lossy().to_string(),
+            single.to_string_lossy().to_string(),
+            "/nonexistent/ghost.txt".into(),
+        ]);
+        let names: Vec<String> = out
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["ghost.txt", "manga", "书A.txt", "书B.txt", "single.epub"],
+            "按完整路径排序；隐藏目录、非书目扩展名被跳过；图片文件夹保留为整体；不存在路径保留交给导入层报告"
+        );
     }
 
     #[test]

@@ -5,6 +5,7 @@
  * 模态的开关状态由父层持有：Esc 语义（先关模态、再退整理）统一在那里处理。
  */
 
+import { DeleteConfirmDialog } from "./ui";
 import { CategoryMenu } from "./CategoryMenu";
 
 interface Props {
@@ -75,39 +76,15 @@ export function BatchBar({
       </div>
 
       {confirming && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-6">
-          <div
-            role="alertdialog"
-            aria-modal="true"
-            aria-label="确认删除"
-            className="w-full max-w-sm rounded-xl bg-paper-raised p-5 shadow-2"
-          >
-            <div className="mb-2 font-display text-[16px] font-semibold text-fg">
-              删除 {selectedSize} 本书？
-            </div>
-            <p className="mb-1 text-[13px] leading-relaxed text-muted">
-              将删除书库记录与本地受管副本（含封面），阅读进度一并清除，此操作不可恢复。
-            </p>
-            <p className="mb-4 text-[13px] leading-relaxed text-muted">
-              导入时的原始文件不会被删除；已上传到 NAS 的内容不受影响。
-            </p>
-            <div className="flex justify-end gap-2.5">
-              <button className="btn" onClick={() => onConfirmingChange(false)} disabled={deleting}>
-                取消
-              </button>
-              <button
-                className="btn btn-danger"
-                disabled={deleting}
-                onClick={() => {
-                  onConfirmingChange(false);
-                  onDelete();
-                }}
-              >
-                {deleting ? "删除中…" : "确认删除"}
-              </button>
-            </div>
-          </div>
-        </div>
+        <DeleteConfirmDialog
+          title={`删除 ${selectedSize} 本书？`}
+          deleting={deleting}
+          onCancel={() => onConfirmingChange(false)}
+          onConfirm={() => {
+            onConfirmingChange(false);
+            onDelete();
+          }}
+        />
       )}
     </>
   );

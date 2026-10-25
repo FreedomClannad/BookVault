@@ -52,6 +52,18 @@ export interface ImportedFile {
   duplicate: boolean;
 }
 
+/** 单个文件的导入失败（坏文件不拖垮整批，逐项报告） */
+export interface ImportFailure {
+  path: string;
+  error: string;
+}
+
+/** 导入结果：目录已由后端展开为书目文件后逐个导入 */
+export interface ImportBatch {
+  imported: ImportedFile[];
+  failed: ImportFailure[];
+}
+
 export type Locator =
   { zip_entry: string } | { byte_range: { start: number; end: number } } | { file_path: string };
 
@@ -191,13 +203,13 @@ const mockChapterText = (id: string) =>
 // ---------- 对外 API ----------
 
 export const api = {
-  async importPaths(paths: string[]): Promise<ImportedFile[]> {
+  async importPaths(paths: string[]): Promise<ImportBatch> {
     if (!hasTauri) {
       // 浏览器预览模式没有解析/存储后端：导入真实文件必须明确失败——
       // 静默假装成功会让「导入的书打开不是/没内容」（真实测试走 pnpm tauri dev）
       throw new Error("浏览器预览模式无法导入真实文件，请运行 pnpm tauri dev 测试");
     }
-    return (await rawInvoke("import_paths", { paths })) as ImportedFile[];
+    return (await rawInvoke("import_paths", { paths })) as ImportBatch;
   },
 
   async listWorks(): Promise<WorkRow[]> {

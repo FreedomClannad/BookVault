@@ -145,9 +145,10 @@ interface Props {
   works: WorkRow[];
   onOpen: (fileId: string) => void;
   onCoverSaved: () => void;
+  onDelete: (work: WorkRow) => void;
 }
 
-export function BookCarousel({ works, onOpen, onCoverSaved }: Props) {
+export function BookCarousel({ works, onOpen, onCoverSaved, onDelete }: Props) {
   const count = works.length;
   const sceneRef = useRef<HTMLDivElement>(null);
   const wrapRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -611,47 +612,57 @@ export function BookCarousel({ works, onOpen, onCoverSaved }: Props) {
             </svg>
           </button>
 
-          {count > 1 && (
-            <div className="flex items-center justify-end gap-2 pt-1">
-              <button
-                type="button"
-                className="cursor-pointer rounded p-1.5 text-muted transition-colors hover:bg-paper-raised hover:text-fg"
-                aria-label="上一本"
-                onClick={() => step(-1)}
-              >
-                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true">
-                  <path
-                    d="M14.5 6l-6 6 6 6"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              </button>
-              <span className={`${codeCls} text-[11px]`}>
-                {String(active + 1).padStart(2, "0")} / {String(count).padStart(2, "0")}
-              </span>
-              <button
-                type="button"
-                className="cursor-pointer rounded p-1.5 text-muted transition-colors hover:bg-paper-raised hover:text-fg"
-                aria-label="下一本"
-                onClick={() => step(1)}
-              >
-                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true">
-                  <path
-                    d="M9.5 6l6 6-6 6"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              </button>
-            </div>
-          )}
+          <div className="flex items-center justify-end gap-2 pt-1">
+            <button
+              type="button"
+              className="cursor-pointer rounded px-2 py-1.5 text-[11px] text-[#c96a6a] transition-colors hover:bg-paper-raised hover:text-[#ff9d9d]"
+              title={`删除「${centerWork?.title ?? ""}」`}
+              onClick={() => centerWork && onDelete(centerWork)}
+            >
+              删除
+            </button>
+            {count > 1 && (
+              <>
+                <button
+                  type="button"
+                  className="cursor-pointer rounded p-1.5 text-muted transition-colors hover:bg-paper-raised hover:text-fg"
+                  aria-label="上一本"
+                  onClick={() => step(-1)}
+                >
+                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true">
+                    <path
+                      d="M14.5 6l-6 6 6 6"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
+                <span className={`${codeCls} text-[11px]`}>
+                  {String(active + 1).padStart(2, "0")} / {String(count).padStart(2, "0")}
+                </span>
+                <button
+                  type="button"
+                  className="cursor-pointer rounded p-1.5 text-muted transition-colors hover:bg-paper-raised hover:text-fg"
+                  aria-label="下一本"
+                  onClick={() => step(1)}
+                >
+                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true">
+                    <path
+                      d="M9.5 6l6 6-6 6"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
+              </>
+            )}
+          </div>
         </div>
       </div>
     </div>

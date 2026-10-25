@@ -1,7 +1,7 @@
 /**
  * 书籍模块网格（包 B-1「列表」形态）：封面朝前的平铺模块，像书籍正常陈列。
  * 模块 = 封面（真实封面，缺失用哈希色 + 书名占位）+ 书名/作者行 +
- * 悬停操作（改分类 / 换封面）。批量整理时整卡点击变为勾选（角标），
+ * 悬停操作（改分类 / 换封面 / 删除）。批量整理时整卡点击变为勾选（角标），
  * 悬停操作隐藏。auto-fill 网格随窗口宽度自适应列数。
  */
 
@@ -18,6 +18,7 @@ interface CardProps {
   onOpen: () => void;
   onCoverSaved: () => void;
   onCategoryChange: (category: string) => void;
+  onDelete: () => void;
   onToast: (msg: string) => void;
 }
 
@@ -29,6 +30,7 @@ function BookCard({
   onOpen,
   onCoverSaved,
   onCategoryChange,
+  onDelete,
   onToast,
 }: CardProps) {
   const coverUrl = useCoverUrl(work.id, work.hasCover);
@@ -97,7 +99,7 @@ function BookCard({
             ✓
           </span>
         )}
-        {/* 悬停操作：改分类 / 换封面（整理模式下隐藏） */}
+        {/* 悬停操作：改分类 / 换封面 / 删除（整理模式下隐藏） */}
         {!selecting && (
           <span className="absolute right-1.5 top-1.5 hidden gap-1 group-hover:flex">
             <span
@@ -124,6 +126,18 @@ function BookCard({
               title="设为封面"
             >
               封面
+            </span>
+            <span
+              role="button"
+              tabIndex={-1}
+              className="cursor-pointer rounded bg-black/55 px-1.5 py-1 text-[10px] leading-none text-[#ffb3b3] hover:bg-black/75"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete();
+              }}
+              title="删除本书"
+            >
+              删除
             </span>
           </span>
         )}
@@ -181,6 +195,7 @@ interface Props {
   onOpen: (fileId: string) => void;
   onCoverSaved: () => void;
   onCategoryChange: (work: WorkRow, category: string) => void;
+  onDelete: (work: WorkRow) => void;
   onToast: (msg: string) => void;
 }
 
@@ -192,6 +207,7 @@ export function BookList({
   onOpen,
   onCoverSaved,
   onCategoryChange,
+  onDelete,
   onToast,
 }: Props) {
   return (
@@ -210,6 +226,7 @@ export function BookList({
           onOpen={() => w.files[0] && onOpen(w.files[0].id)}
           onCoverSaved={onCoverSaved}
           onCategoryChange={(c) => onCategoryChange(w, c)}
+          onDelete={() => onDelete(w)}
           onToast={onToast}
         />
       ))}

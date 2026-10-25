@@ -82,15 +82,41 @@ pub struct OpenedBook {
 
 // ---------- 导入与书库 ----------
 
+/// 单个导入失败项（导入命令按文件聚合结果，坏文件不拖垮整批）
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportFailure {
+    pub path: String,
+    pub error: String,
+}
+
+/// 导入结果：成功项 + 失败项；目录已展开为书目文件后逐个导入
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportBatch {
+    pub imported: Vec<ImportedFile>,
+    pub failed: Vec<ImportFailure>,
+}
+
 #[tauri::command]
-fn import_paths(app: tauri::AppHandle, paths: Vec<String>) -> Result<Vec<ImportedFile>, String> {
+fn import_paths(app: tauri::AppHandle, paths: Vec<String>) -> Result<ImportBatch, String> {
     let st = state(&app);
     let mut conn = st.db.lock().map_err(|e| e.to_string())?;
     let lib = Library::new(&st.data_dir);
-    paths
-        .iter()
-        .map(|p| lib.import(&mut conn, std::path::Path::new(p)))
-        .collect()
+    let mut batch = ImportBatch {
+        imported: Vec::new(),
+        failed: Vec::new(),
+    };
+    for p in library::expand_import_paths(&paths) {
+        match lib.import(&mut conn, &p) {
+            Ok(f) => batch.imported.push(f),
+            Err(e) => batch.failed.push(ImportFailure {
+                path: p.display().to_string(),
+                error: e,
+            }),
+        }
+    }
+    Ok(batch)
 }
 
 #[tauri::command]

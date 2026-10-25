@@ -43,9 +43,16 @@ export default function App() {
     async (paths: string[]) => {
       if (paths.length === 0) return;
       try {
-        const results = await api.importPaths(paths);
-        const dup = results.filter((r) => r.duplicate).length;
-        setToast(`已导入 ${results.length - dup} 项${dup ? `，跳过重复 ${dup} 项` : ""}`);
+        const { imported, failed } = await api.importPaths(paths);
+        const dup = imported.filter((r) => r.duplicate).length;
+        let msg = `已导入 ${imported.length - dup} 项${dup ? `，跳过重复 ${dup} 项` : ""}`;
+        if (failed.length > 0) {
+          // 失败详情同时写入了 import_tasks 表；toast 给出第一条便于对症
+          const first =
+            failed[0].error.length > 60 ? `${failed[0].error.slice(0, 60)}…` : failed[0].error;
+          msg += `，失败 ${failed.length} 项（${first}）`;
+        }
+        setToast(msg);
         await refresh();
       } catch (e) {
         setToast(`导入失败: ${String(e)}`);
@@ -54,16 +61,24 @@ export default function App() {
     [refresh],
   );
 
-  const onDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      const paths = Array.from(e.dataTransfer.files)
-        .map((f) => (f as File & { path?: string }).path)
-        .filter(Boolean) as string[];
-      void importPaths(paths);
-    },
-    [importPaths],
-  );
+  // 拖拽导入走 Tauri 原生拖放事件：Tauri v2 默认接管 webview 拖放
+  // （dragDropEnabled），HTML5 的 dataTransfer.files 在桌面端收不到文件路径
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    let unlisten: (() => void) | null = null;
+    void import("@tauri-apps/api/webview")
+      .then(({ getCurrentWebview }) =>
+        getCurrentWebview().onDragDropEvent((ev) => {
+          if (ev.payload.type === "drop") void importPaths(ev.payload.paths);
+        }),
+      )
+      .then((un) => {
+        unlisten = un;
+      });
+    return () => {
+      unlisten?.();
+    };
+  }, [importPaths]);
 
   const toastEl = toast && (
     <div className="fixed bottom-7 left-1/2 z-50 -translate-x-1/2 rounded-lg bg-chrome-deep px-5 py-2.5 text-sm text-chrome-fg shadow-2">
@@ -76,10 +91,10 @@ export default function App() {
     setView("library");
   }, []);
 
-  // 阅读中：全屏接管，顶栏不渲染（沉浸式）
+  // 阅读中：全屏接管，顶栏不渲染（沉浸式）；拖拽导入由全局 Tauri 事件覆盖
   if (view === "reader" && readingFileId !== null) {
     return (
-      <div className="h-full min-w-[720px]" onDrop={onDrop} onDragOver={(e) => e.preventDefault()}>
+      <div className="h-full min-w-[720px]" onDragOver={(e) => e.preventDefault()}>
         <Reader fileId={readingFileId} onExit={exitReader} />
         {toastEl}
       </div>
@@ -97,11 +112,8 @@ export default function App() {
   }
 
   return (
-    <div
-      className="flex h-full min-w-[720px] flex-col"
-      onDrop={onDrop}
-      onDragOver={(e) => e.preventDefault()}
-    >      {/* 顶栏与工具栏已合并为 Library 内的单一 sticky 顶栏 */}
+    <div className="flex h-full min-w-[720px] flex-col" onDragOver={(e) => e.preventDefault()}>
+      {/* 顶栏与工具栏已合并为 Library 内的单一 sticky 顶栏 */}
       <main className="flex min-w-0 flex-1 flex-col bg-paper">
         <Library
           works={works}

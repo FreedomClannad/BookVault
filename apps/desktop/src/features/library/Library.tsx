@@ -12,7 +12,7 @@ import { BatchBar } from "./BatchBar";
 import { BookCarousel } from "./BookCarousel";
 import { BookList } from "./BookList";
 import { CATEGORIES, FORMAT_LABELS } from "./categories";
-import { ChipGroup, MenuItem, Popover, PopoverSection } from "./ui";
+import { ChipGroup, DeleteConfirmDialog, MenuItem, Popover, PopoverSection } from "./ui";
 
 interface Props {
   works: WorkRow[];
@@ -74,6 +74,8 @@ export function Library({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // 单本删除（书卡/书架入口）
+  const [pendingDelete, setPendingDelete] = useState<WorkRow | null>(null);
 
   useEffect(() => {
     if (!toast) return;
@@ -87,17 +89,17 @@ export function Library({
     setConfirmingDelete(false);
   }, []);
 
-  // Esc：先关删除确认模态，再退整理模式（ui-style §6 所有操作可键盘完成）
+  // Esc：先关删除确认模态（单本/批量），再退整理模式（ui-style §6 所有操作可键盘完成）
   useEffect(() => {
-    if (!batchOn) return;
     const h = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      if (confirmingDelete) setConfirmingDelete(false);
-      else exitBatch();
+      if (pendingDelete) setPendingDelete(null);
+      else if (confirmingDelete) setConfirmingDelete(false);
+      else if (batchOn) exitBatch();
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
-  }, [batchOn, confirmingDelete, exitBatch]);
+  }, [batchOn, confirmingDelete, pendingDelete, exitBatch]);
 
   const switchViewMode = (mode: ViewMode) => {
     setViewMode(mode);
@@ -196,6 +198,19 @@ export function Library({
     }
   };
 
+  const confirmDeleteOne = async () => {
+    const work = pendingDelete;
+    if (!work) return;
+    setPendingDelete(null);
+    try {
+      const removed = await api.deleteWorks([work.id]);
+      onDataChanged();
+      setToast(removed > 0 ? `已删除「${work.title}」` : "该书已不在书库中");
+    } catch (e) {
+      setToast(`删除失败: ${String(e)}`);
+    }
+  };
+
   const listNode = (selecting: boolean) => (
     <BookList
       works={pool}
@@ -205,6 +220,7 @@ export function Library({
       onOpen={onOpen}
       onCoverSaved={() => coverSaved("封面已生成")}
       onCategoryChange={(w, c) => void setCategory(w, c)}
+      onDelete={(w) => setPendingDelete(w)}
       onToast={setToast}
     />
   );
@@ -419,6 +435,16 @@ export function Library({
             works={pool}
             onOpen={onOpen}
             onCoverSaved={() => coverSaved("封面已生成")}
+            onDelete={(w) => setPendingDelete(w)}
+          />
+        )}
+
+        {pendingDelete && (
+          <DeleteConfirmDialog
+            title={`删除「${pendingDelete.title}」？`}
+            deleting={false}
+            onCancel={() => setPendingDelete(null)}
+            onConfirm={() => void confirmDeleteOne()}
           />
         )}
 
