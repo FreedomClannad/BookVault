@@ -11,6 +11,7 @@
 | ---------------------------------------------------------------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | [requirements/BOOKVAULT_AI_PROJECT_BRIEF.md](requirements/BOOKVAULT_AI_PROJECT_BRIEF.md) | ✅ 权威    | 产品需求与架构约定（项目最高优先级文档，2026-10-24 由根目录移入）                                                            |
 | [plans/phase-1-implementation-plan.md](plans/phase-1-implementation-plan.md)             | ✅ 已确认  | Phase 1 技术选型、目录结构、解析库许可证核实、Work–Edition–BookFile 三层领域模型、里程碑 M0–M4 与验收标准（决策记录见其 §9） |
+| [plans/interaction-port-backlog.md](plans/interaction-port-backlog.md)                   | 🚧 进行中  | 交互移植待办（Wenku8_Flutter 参考）：包 A 阅读器交互 ✅、包 B 书架/查找、包 C 书签/听书、EPUB 分页适配、真机验证清单 |
 | [standards/AI_DEV_PROCESS.md](standards/AI_DEV_PROCESS.md)                               | ✅ 已采纳  | AI 开发流程规范调研（AGENTS.md 开放标准、spec-first、skills）与本仓库执行流程                                                |
 | [formats/README.md](formats/README.md)                                                   | ✅ M1      | 格式适配器行为、安全限额与已知局限                                                                                           |
 | [adr/](adr/)                                                                             | ✅ 001–009 | 架构决策记录：monorepo / 解析-渲染分层 / 进度哈希绑定 / Tauri 快捷键 spike                                                   |
