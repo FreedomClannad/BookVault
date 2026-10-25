@@ -288,7 +288,7 @@ pub async fn upsert_item(
     }
 
     if let Some(f) = &req.file {
-        let storage_rel = format!("files/{}/{}", &f.sha256[..2], &f.sha256);
+        let storage_rel = format!("files/{}/{}", &f.sha256[..2], f.sha256);
         let r = sqlx::query(
             "INSERT INTO files (id, edition_id, sha256, size, format, name, storage_path, uploaded_by, created_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
@@ -548,7 +548,7 @@ pub async fn upload_file(
     }
 
     let now = now_ms();
-    let storage_rel = format!("files/{}/{}", &hash[..2], &hash);
+    let storage_rel = format!("files/{}/{}", &hash[..2], hash);
     let r = sqlx::query(
         "INSERT INTO files (id, edition_id, sha256, size, format, name, storage_path, uploaded_by, created_at) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \

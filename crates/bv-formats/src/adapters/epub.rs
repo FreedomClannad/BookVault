@@ -299,15 +299,13 @@ pub(crate) fn parse_opf(xml: &str, opf_dir: &str) -> OpfData {
                                 data.metadata.language = Some(value);
                             }
                         }
-                        Some("identifier") => {
-                            if !value.is_empty() {
-                                let key = if ident_key.is_empty() {
-                                    "id".to_string()
-                                } else {
-                                    ident_key.clone()
-                                };
-                                data.metadata.identifiers.push((key, value));
-                            }
+                        Some("identifier") if !value.is_empty() => {
+                            let key = if ident_key.is_empty() {
+                                "id".to_string()
+                            } else {
+                                ident_key.clone()
+                            };
+                            data.metadata.identifiers.push((key, value));
                         }
                         _ => {}
                     }

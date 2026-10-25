@@ -4,7 +4,8 @@
 use rusqlite::Connection;
 use std::path::Path;
 
-const MIGRATIONS: [&str; 1] = [r#"
+const MIGRATIONS: [&str; 2] = [
+    r#"
 CREATE TABLE IF NOT EXISTS works (
   id           TEXT PRIMARY KEY,
   title        TEXT NOT NULL,
@@ -58,7 +59,12 @@ CREATE TABLE IF NOT EXISTS settings (
   key    TEXT PRIMARY KEY,
   value  TEXT NOT NULL
 );
-"#];
+"#,
+    // v2：作品分类（本地字段，不参与 NAS 同步；''=未分类）
+    r#"
+ALTER TABLE works ADD COLUMN category TEXT NOT NULL DEFAULT '';
+"#,
+];
 
 pub fn open(db_dir: &Path) -> Result<Connection, String> {
     std::fs::create_dir_all(db_dir).map_err(|e| format!("create db dir: {e}"))?;
