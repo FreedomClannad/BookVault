@@ -175,6 +175,15 @@ fn set_work_category(
     library::set_work_category(&conn, &work_id, &category)
 }
 
+/// 批量删除作品（书架整理）。不可逆：UI 层必须先弹确认对话框（硬规则 §3）；
+/// 只删书库记录与受管目录内的副本，用户原始文件与原位引用目录不动。
+#[tauri::command]
+fn delete_works(app: tauri::AppHandle, work_ids: Vec<String>) -> Result<usize, String> {
+    let st = state(&app);
+    let mut conn = st.db.lock().map_err(|e| e.to_string())?;
+    library::delete_works(&mut conn, &st.data_dir, &work_ids)
+}
+
 /// 前端生成的封面（canvas dataURL 的 base64）落盘
 #[tauri::command]
 fn save_cover(
@@ -511,6 +520,7 @@ pub fn run() {
             import_paths,
             list_works,
             set_work_category,
+            delete_works,
             save_cover,
             import_cover,
             open_book,

@@ -16,6 +16,15 @@ export const CATEGORIES: string[] = [
   "文档",
 ];
 
+/** 筛选/列表展示用的格式名（与 book_files.format 枚举一致） */
+export const FORMAT_LABELS: Record<string, string> = {
+  epub: "EPUB",
+  txt: "TXT",
+  pdf: "PDF",
+  cbz: "CBZ",
+  image_dir: "图片文件夹",
+};
+
 export function coverHashColor(seed: string): string {
   let h = 0;
   for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;

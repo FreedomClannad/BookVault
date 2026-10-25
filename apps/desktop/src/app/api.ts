@@ -141,24 +141,48 @@ const MOCK_CHAPTERS: ChapterDto[] = [
   { id: "ch-1", title: "第二章 演示", locator: { byte_range: { start: 100, end: 200 } } },
 ];
 
-const mockWork: WorkRow = {
-  id: "mock-w1",
-  title: "演示之书（浏览器 mock）",
-  authors: ["BookVault"],
+const mockWork = (
+  id: string,
+  title: string,
+  authors: string[],
+  category: string,
+  format: string,
+  lastReadAt: number | null,
+): WorkRow => ({
+  id,
+  title,
+  authors,
   hasCover: false,
-  category: "",
-  lastReadAt: Date.now() - 42 * 60_000,
+  category,
+  lastReadAt,
   files: [
     {
-      id: "mock-f1",
-      format: "txt",
-      name: "demo.txt",
+      id: `${id}-f1`,
+      format,
+      name: `${title}.${format}`,
       size: 200,
       sha256: "0".repeat(64),
       origin: "local",
     },
   ],
-};
+});
+
+/** mock 书库 5 本：立体书架的书脊陈列、翻页器与筛选在浏览器 dev 下有真实形态可看 */
+const mockWorks: WorkRow[] = [
+  mockWork(
+    "mock-w1",
+    "演示之书（浏览器 mock）",
+    ["BookVault"],
+    "",
+    "txt",
+    Date.now() - 42 * 60_000,
+  ),
+  mockWork("mock-w2", "月光航线", ["林见舟"], "科幻", "epub", Date.now() - 26 * 3_600_000),
+  mockWork("mock-w3", "山海招待所", ["许芦"], "悬疑", "txt", Date.now() - 3 * 86_400_000),
+  mockWork("mock-w4", "银翼研究所", ["白鹿"], "玄幻", "pdf", null),
+  mockWork("mock-w5", "纸岛信箱", ["汤野"], "言情", "epub", null),
+];
+const mockWorkLegacy = mockWorks[0];
 
 const mockChapterText = (id: string) =>
   `${id === "ch-0" ? "第一章 演示" : "第二章 演示"}\n\n` +
@@ -169,27 +193,27 @@ const mockChapterText = (id: string) =>
 export const api = {
   async importPaths(paths: string[]): Promise<ImportedFile[]> {
     if (!hasTauri) {
-      return paths.map((p) => ({
-        workId: "mock-w1",
-        editionId: "mock-e1",
-        fileId: "mock-f1",
-        title: p,
-        format: "txt",
-        sha256: "0".repeat(64),
-        duplicate: false,
-      }));
+      // 浏览器预览模式没有解析/存储后端：导入真实文件必须明确失败——
+      // 静默假装成功会让「导入的书打开不是/没内容」（真实测试走 pnpm tauri dev）
+      throw new Error("浏览器预览模式无法导入真实文件，请运行 pnpm tauri dev 测试");
     }
     return (await rawInvoke("import_paths", { paths })) as ImportedFile[];
   },
 
   async listWorks(): Promise<WorkRow[]> {
-    if (!hasTauri) return [mockWork];
+    if (!hasTauri) return mockWorks;
     return (await rawInvoke("list_works")) as WorkRow[];
   },
 
   async setWorkCategory(workId: string, category: string): Promise<void> {
     if (!hasTauri) return;
     await rawInvoke("set_work_category", { workId, category });
+  },
+
+  /** 批量删除作品（不可逆，调用方必须先弹确认对话框）；返回实际删除数 */
+  async deleteWorks(workIds: string[]): Promise<number> {
+    if (!hasTauri) return 0;
+    return (await rawInvoke("delete_works", { workIds })) as number;
   },
 
   /** 保存前端生成的封面（PNG dataURL 或纯 base64）；成功后需刷新书库使 hasCover 生效 */
@@ -212,8 +236,8 @@ export const api = {
   async openBook(fileId: string): Promise<OpenedBook> {
     if (!hasTauri) {
       return {
-        workId: mockWork.id,
-        file: mockWork.files[0],
+        workId: mockWorkLegacy.id,
+        file: mockWorkLegacy.files[0],
         parsedSha256: "0".repeat(64),
         book: {
           kind: "txt",

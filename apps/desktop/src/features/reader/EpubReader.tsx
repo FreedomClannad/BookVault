@@ -24,6 +24,8 @@ interface Props {
   onProgress: (loc: ReadingLocation) => void;
   /** iframe 内的鼠标活动（iframe 会吞掉父层 mousemove，需内部转发唤出悬浮工具栏） */
   onActivity: () => void;
+  /** 查找跳转意图：seq 变化时滚到章内等比例位置（EPUB 命中不做 iframe 内高亮） */
+  jump?: { ratio: number; seq: number } | null;
 }
 
 function zipDir(href: string): string {
@@ -84,6 +86,7 @@ export function EpubReader({
   prefs,
   onProgress,
   onActivity,
+  jump,
 }: Props) {
   const init = initial?.type === "chapter" ? initial : null;
   const [doc, setDoc] = useState<string>("");
@@ -91,6 +94,8 @@ export function EpubReader({
   const chapterRef = useRef(chapterId);
   chapterRef.current = chapterId;
   const restoredRef = useRef(false);
+  /** 查找跳转意图按 seq 只消费一次：切章重载 srcDoc 时旧意图不再触发 */
+  const jumpSeqConsumed = useRef(-1);
 
   const chapter = useMemo(() => chapters.find((c) => c.id === chapterId), [chapters, chapterId]);
 
@@ -131,6 +136,22 @@ export function EpubReader({
   useEffect(() => {
     applyTypo();
   }, [applyTypo, doc]);
+
+  // 查找跳转：正文就绪后滚到等比例位置并上报进度
+  useEffect(() => {
+    if (!jump || !doc) return;
+    if (jump.seq === jumpSeqConsumed.current) return;
+    jumpSeqConsumed.current = jump.seq;
+    const win = frameRef.current?.contentWindow;
+    if (!win) return;
+    const d2 = win.document.documentElement;
+    win.scrollTo(0, jump.ratio * Math.max(0, d2.scrollHeight - win.innerHeight));
+    onProgress({
+      type: "chapter",
+      chapterId: chapterRef.current,
+      progress: Math.min(1, Math.max(0, jump.ratio)),
+    });
+  }, [jump, doc, onProgress]);
 
   // iframe 内滚动进度 + 恢复位置
   useEffect(() => {

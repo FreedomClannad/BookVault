@@ -1,8 +1,10 @@
 /**
  * 统一阅读器框架（沉浸式）：阅读时全窗口接管、正文铺满，不再有常驻侧栏与双层工具栏。
  * 交互模型（ui-style §1「工具栏自动隐藏，交互时浮现」）：
- * - 底部悬浮工具栏：鼠标移动/点击唤出，静止 2.5s 淡出；悬停或目录抽屉打开时不隐藏；
+ * - 底部悬浮工具栏：鼠标移动/点击唤出，静止 2.5s 淡出；悬停或抽屉/面板打开时不隐藏；
  * - 章节目录/书签/页码跳转：右侧滑出抽屉（覆盖式，不挤压正文）；
+ * - 查找（包 B-4）：Ctrl/Cmd+F 或工具栏唤出右侧抽屉，TXT/EPUB 整书跨章检索；
+ *   命中点击跳章定位——分页模式换算屏号、滚动模式滚到等比位置；TXT 正文 mark 高亮；
  * - 键盘：←/→ 翻章/翻页（PgUp/PgDn 同向），空格仅用于漫画与 PDF，小说保留空格滚屏；
  * - 小说分页/竖排（Wenku8 式交互）：页码导航状态上提至此（ADR-002），翻页动画由
  *   TxtReader 呈现；排版面板按书记忆（readingPrefs 两层：全局默认 + 按书覆盖）。
@@ -15,6 +17,7 @@ import { api, type OpenedBook, type ReadingLocation } from "../../app/api";
 import { ComicReader, type ComicFit } from "./ComicReader";
 import { EpubReader } from "./EpubReader";
 import { PdfReader } from "./PdfReader";
+import { SearchPanel } from "./SearchPanel";
 import { TxtReader } from "./TxtReader";
 import { isTypingTarget } from "./keyboard";
 import {
@@ -231,6 +234,13 @@ export function Reader({ fileId, onExit }: Props) {
   const [typoOpen, setTypoOpen] = useState(false);
   const [autoOn, setAutoOn] = useState(false);
 
+  // 查找（包 B-4）：面板开关与检索词（词持有在 Reader 层，关闭面板不清高亮）
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  /** 滚动模式的查找跳转意图（分页模式走 restoreRatioRef/屏号换算） */
+  const [scrollJump, setScrollJump] = useState<{ ratio: number; seq: number } | null>(null);
+  const jumpSeqRef = useRef(0);
+
   // 导航状态（按内容类型上提；渲染器受控渲染）
   const [chapterIdx, setChapterIdx] = useState(0);
   const [pageNum, setPageNum] = useState(0);
@@ -262,13 +272,16 @@ export function Reader({ fileId, onExit }: Props) {
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hoverChrome = useRef(false);
   const overlayOpen = useRef(false);
-  overlayOpen.current = drawerOpen || themePopOpen || typoOpen;
+  overlayOpen.current = drawerOpen || themePopOpen || typoOpen || searchOpen;
   const activeDrawerRef = useRef<HTMLButtonElement | null>(null);
 
   const contents = opened?.book.contents;
   const chapters = contents && "novel" in contents ? contents.novel.chapters : null;
   const pdfDoc = contents && "document" in contents ? contents.document : null;
   const comicDoc = contents && "comic" in contents ? contents.comic : null;
+  // 查找范围：TXT/EPUB 章节文本（PDF 检索后置，见 interaction-port-backlog）
+  const searchable =
+    Boolean(chapters) && (opened?.file.format === "txt" || opened?.file.format === "epub");
 
   // 逐书偏好：打开书籍后切到「这本书」的设置（按书覆盖叠加全局默认）
   const workId = opened?.workId ?? null;
@@ -361,19 +374,45 @@ export function Reader({ fileId, onExit }: Props) {
   }, [novelPaged, sheets, novelPage, chapterIdx, chapters, save]);
 
   const switchChapter = useCallback(
-    (idx: number, opts?: { tail?: boolean }) => {
+    (idx: number, opts?: { tail?: boolean; ratio?: number }) => {
       if (!chapters) return;
       const i = Math.min(chapters.length - 1, Math.max(0, idx));
       setChapterIdx(i);
-      // 布局量测后的一次性意图：tail=回到上一章末屏；否则置顶/按恢复比例
+      // 布局量测后的一次性意图：tail=回到上一章末屏；ratio=查找跳转；否则置顶
       pendingTailRef.current = Boolean(opts?.tail) && novelPaged;
-      restoreRatioRef.current = null;
+      restoreRatioRef.current = opts?.ratio != null && novelPaged ? opts.ratio : null;
+      if (opts?.ratio != null) {
+        jumpSeqRef.current += 1;
+        setScrollJump({ ratio: opts.ratio, seq: jumpSeqRef.current });
+      }
       setNovelPage(0);
       setSheets(0);
       setNavSeq((s) => s + 1);
       save({ type: "chapter", chapterId: chapters[i].id, progress: 0 });
     },
     [chapters, novelPaged, save],
+  );
+
+  /** 查找命中跳转：跨章切章并携带比例；本章内直接换算（分页=屏号，滚动=等比位置） */
+  const handleSearchJump = useCallback(
+    (idx: number, ratio: number) => {
+      if (idx !== chapterIdx) {
+        switchChapter(idx, { ratio });
+        return;
+      }
+      if (novelPaged) {
+        if (sheets > 0) {
+          setNovelPage(sheetFromProgress(Math.min(1, Math.max(0, ratio)), sheets));
+          setNavSeq((s) => s + 1);
+        } else {
+          restoreRatioRef.current = ratio;
+        }
+        return;
+      }
+      jumpSeqRef.current += 1;
+      setScrollJump({ ratio: Math.min(1, Math.max(0, ratio)), seq: jumpSeqRef.current });
+    },
+    [chapterIdx, novelPaged, sheets, switchChapter],
   );
 
   /** 分页布局量测回调：消费恢复/末屏意图，并钳制越界屏号 */
@@ -448,9 +487,18 @@ export function Reader({ fileId, onExit }: Props) {
   // 统一键盘导航；Esc 关闭浮层。EPUB iframe 内的按键不冒泡到本层（历史限制）
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
+      // Ctrl/Cmd+F 唤出查找（在输入框里也生效，便于改词重搜）；PDF/漫画暂不支持
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
+        if (!searchable) return;
+        e.preventDefault();
+        setDrawerOpen(false);
+        setSearchOpen(true);
+        return;
+      }
       if (isTypingTarget(e)) return;
       if (e.key === "Escape") {
-        if (typoOpen) setTypoOpen(false);
+        if (searchOpen) setSearchOpen(false);
+        else if (typoOpen) setTypoOpen(false);
         else if (themePopOpen) setThemePopOpen(false);
         else if (drawerOpen) setDrawerOpen(false);
         return;
@@ -474,7 +522,18 @@ export function Reader({ fileId, onExit }: Props) {
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
-  }, [navNext, navPrev, drawerOpen, themePopOpen, typoOpen, novelPaged, pdfDoc, comicDoc]);
+  }, [
+    navNext,
+    navPrev,
+    drawerOpen,
+    themePopOpen,
+    typoOpen,
+    searchOpen,
+    searchable,
+    novelPaged,
+    pdfDoc,
+    comicDoc,
+  ]);
 
   // ---- 悬浮工具栏自动隐藏 ----
   const showChrome = useCallback(() => {
@@ -644,6 +703,8 @@ export function Reader({ fileId, onExit }: Props) {
           navSeq={navSeq}
           autoScrollPx={autoScrollPx}
           onAutoEnd={handleAutoEnd}
+          jump={scrollJump}
+          highlight={searchQuery.trim() || undefined}
         />
       );
     }
@@ -657,6 +718,7 @@ export function Reader({ fileId, onExit }: Props) {
           prefs={prefs}
           onProgress={save}
           onActivity={showChrome}
+          jump={scrollJump}
         />
       );
     }
@@ -783,9 +845,26 @@ export function Reader({ fileId, onExit }: Props) {
             >
               {autoOn ? "⏸ 停" : "▶ 自动"}
             </ChromeBtn>
-            <ChromeBtn title="章节目录" onClick={() => setDrawerOpen(true)}>
+            <ChromeBtn
+              title="章节目录"
+              onClick={() => {
+                setSearchOpen(false);
+                setDrawerOpen(true);
+              }}
+            >
               目录
             </ChromeBtn>
+            {searchable && (
+              <ChromeBtn
+                title="查找（Ctrl+F）"
+                onClick={() => {
+                  setDrawerOpen(false);
+                  setSearchOpen(true);
+                }}
+              >
+                查找
+              </ChromeBtn>
+            )}
           </>
         )}
 
@@ -994,6 +1073,34 @@ export function Reader({ fileId, onExit }: Props) {
     </div>
   );
 
+  // 查找抽屉（包 B-4）：跳转后不关闭，便于在命中列表里连续定位
+  const searchDrawer = searchable && (
+    <div className={`fixed inset-0 z-50 ${searchOpen ? "" : "pointer-events-none"}`}>
+      <div
+        className={`absolute inset-0 bg-black/35 transition-opacity duration-200 ${
+          searchOpen ? "opacity-100" : "opacity-0"
+        }`}
+        onClick={() => setSearchOpen(false)}
+      />
+      <aside
+        className={`absolute inset-y-0 right-0 flex w-[22rem] max-w-[85vw] flex-col bg-paper shadow-2 transition-transform duration-200 ${
+          searchOpen ? "translate-x-0" : "translate-x-full"
+        }`}
+      >
+        <SearchPanel
+          fileId={fileId}
+          format={opened.file.format}
+          chapters={chapters ?? []}
+          currentChapterIdx={chapterIdx}
+          query={searchQuery}
+          onQueryChange={setSearchQuery}
+          onJump={handleSearchJump}
+          onClose={() => setSearchOpen(false)}
+        />
+      </aside>
+    </div>
+  );
+
   return (
     <div
       className="relative flex h-full min-w-0 flex-col"
@@ -1018,6 +1125,7 @@ export function Reader({ fileId, onExit }: Props) {
 
       {chromeBar}
       {drawer}
+      {searchDrawer}
     </div>
   );
 }

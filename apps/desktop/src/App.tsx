@@ -1,6 +1,6 @@
 /**
  * 应用根组件：墨色顶栏 + 书架主区；阅读/设置为全屏接管（沉浸式）。
- * 设置从顶栏齿轮进入；书架为 3D 书柜（Library），支持分类与封面管理。
+ * 设置入口在书架工具栏（齿轮按钮）；顶栏只留品牌与 NAS 状态。
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -11,20 +11,6 @@ import { Settings } from "./features/settings/Settings";
 import "./app/app.css";
 
 type View = "library" | "reader" | "settings";
-
-function GearIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
-      <circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" strokeWidth="1.6" />
-      <path
-        d="M12 3.5v2.2M12 18.3v2.2M4.9 7.8l1.9 1.1M17.2 15.1l1.9 1.1M4.9 16.2l1.9-1.1M17.2 8.9l1.9-1.1"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.6"
-      />
-    </svg>
-  );
-}
 
 export default function App() {
   const [view, setView] = useState<View>("library");
@@ -115,41 +101,11 @@ export default function App() {
       className="flex h-full min-w-[720px] flex-col"
       onDrop={onDrop}
       onDragOver={(e) => e.preventDefault()}
-    >
-      <header className="flex h-12 flex-none items-center gap-3 bg-linear-to-r from-chrome to-chrome-deep px-4 text-chrome-fg">
-        <div
-          className="flex h-[30px] w-[30px] flex-none items-center justify-center rounded-[7px] bg-seal font-display text-base text-[#f6ece8] shadow-[inset_0_0_0_1.5px_rgba(255,255,255,0.22)]"
-          aria-hidden="true"
-        >
-          书
-        </div>
-        <div className="font-display text-[15px] tracking-wide text-[#e8eaee]">BookVault</div>
-        <span className="hidden text-[11px] text-chrome-muted md:inline">私人藏书之所</span>
-
-        <span className="ml-auto" />
-        <div
-          title={nasOn ? "NAS 已连接" : "NAS 未连接"}
-          className={`flex items-center gap-1.5 text-xs ${nasOn ? "text-chrome-fg" : "text-chrome-muted"}`}
-        >
-          <span
-            className={`h-[7px] w-[7px] rounded-full ${nasOn ? "bg-[#58a97a]" : "bg-chrome-muted"}`}
-          />
-          <span className="hidden sm:inline">{nasOn ? "NAS 已连接" : "NAS 未连接"}</span>
-        </div>
-        <span className="h-5 w-px bg-white/10" aria-hidden="true" />
-        <button
-          title="设置"
-          aria-label="设置"
-          onClick={() => setView("settings")}
-          className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-chrome-muted transition-colors hover:bg-white/10 hover:text-white"
-        >
-          <GearIcon />
-        </button>
-      </header>
-
+    >      {/* 顶栏与工具栏已合并为 Library 内的单一 sticky 顶栏 */}
       <main className="flex min-w-0 flex-1 flex-col bg-paper">
         <Library
           works={works}
+          nasOn={nasOn}
           onOpen={(fileId) => {
             setReadingFileId(fileId);
             setView("reader");
@@ -159,6 +115,7 @@ export default function App() {
             const dir = await api.pickDirectory();
             if (dir) void importPaths([dir]);
           }}
+          onOpenSettings={() => setView("settings")}
           onDataChanged={() => void refresh()}
         />
       </main>

@@ -216,6 +216,93 @@ pub fn set_work_category(conn: &Connection, work_id: &str, category: &str) -> Re
     Ok(())
 }
 
+/// 批量删除作品（书架「整理」入口）：事务内按 progress → files → editions → works
+/// 顺序清掉三层记录与进度，再清理磁盘文件。返回成功删除的作品数。
+///
+/// 文件安全（需求 §9/§11.3，不可逆操作由 UI 确认对话框把关）：
+/// - 只删受管目录（data_dir/books、data_dir/covers）之内的文件，路径先
+///   canonicalize 再校验前缀，防 DB 脏数据指向任意路径；
+/// - 图片文件夹是原位引用（导入不复制），DB 记录删除但绝不触碰用户目录；
+/// - 用户导入时的原始文件本来就不动（staged_copy 语义，需求 §1.3）。
+pub fn delete_works(
+    conn: &mut Connection,
+    data_dir: &Path,
+    work_ids: &[String],
+) -> Result<usize, String> {
+    let mut removed = 0usize;
+    for work_id in work_ids {
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let exists: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM works WHERE id = ?1)",
+                [work_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if !exists {
+            // 幂等：批量列表与并发修改可能已删过，跳过即可
+            tx.commit().map_err(|e| e.to_string())?;
+            continue;
+        }
+        let row: (Option<String>, String) = tx
+            .query_row(
+                "SELECT (SELECT GROUP_CONCAT(f.path, char(31)) FROM book_files f \
+                   JOIN editions e ON e.id = f.edition_id WHERE e.work_id = ?1), \
+                  COALESCE((SELECT cover_file FROM works WHERE id = ?1), '')",
+                [work_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map_err(|e| e.to_string())?;
+        let paths: Vec<String> = row
+            .0
+            .unwrap_or_default()
+            .split('\u{1f}')
+            .map(str::to_string)
+            .collect();
+        let cover = row.1;
+        tx.execute(
+            "DELETE FROM reading_progress WHERE book_file_id IN ( \
+               SELECT f.id FROM book_files f JOIN editions e ON e.id = f.edition_id \
+               WHERE e.work_id = ?1 )",
+            [work_id],
+        )
+        .map_err(|e| e.to_string())?;
+        for sql in [
+            "DELETE FROM book_files WHERE edition_id IN (SELECT id FROM editions WHERE work_id = ?1)",
+            "DELETE FROM editions WHERE work_id = ?1",
+            "DELETE FROM works WHERE id = ?1",
+        ] {
+            tx.execute(sql, [work_id]).map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        removed += 1;
+
+        // 文件清理放在事务外（DB 已提交）：失败只丢孤儿文件，不再回滚书库记录
+        let books_dir = data_dir.join("books");
+        let covers_dir = data_dir.join("covers");
+        for p in paths {
+            if is_inside(&books_dir, std::path::Path::new(&p)) {
+                std::fs::remove_file(&p).ok();
+            }
+        }
+        if !cover.is_empty() && is_inside(&covers_dir, std::path::Path::new(&cover)) {
+            std::fs::remove_file(&cover).ok();
+        }
+    }
+    Ok(removed)
+}
+
+/// 路径 p 是否位于 dir 之内（两边 canonicalize，抵御 `..`/符号链接写入 DB 的脏数据）
+fn is_inside(dir: &Path, p: &Path) -> bool {
+    let Ok(canonical_dir) = dir.canonicalize() else {
+        return false;
+    };
+    let Ok(canonical_p) = p.canonicalize() else {
+        return false; // 文件不存在（此前 staged 副本已丢）→ 无需删除
+    };
+    canonical_p.starts_with(&canonical_dir)
+}
+
 /// 通过对应解析器读取资源字节（EPUB/CBZ 走 zip；图片文件夹走文件系统；TXT 走区间）
 pub fn read_resource_bytes(
     path: &Path,
@@ -560,6 +647,85 @@ mod tests {
             )
             .unwrap();
         assert_eq!((w, e, f), (1, 1, 1));
+    }
+
+    #[test]
+    fn delete_works_removes_rows_and_managed_files_only() {
+        ensure_samples();
+        let tmp = tempfile::tempdir().unwrap();
+        let mut conn = db::open(tmp.path()).unwrap();
+        let lib = Library::new(tmp.path());
+        let sample = ws_samples("txt/utf8-chapters.txt");
+        let res = lib.import(&mut conn, &sample).unwrap();
+        let work_id = work_id_of(&conn, &res.file_id).unwrap();
+        // 手动生成封面（登记到 covers/）
+        let png = [0x89u8, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4];
+        lib.save_cover_bytes(&conn, &res.file_id, &png, "png")
+            .unwrap();
+        // 留下一条阅读进度
+        conn.execute(
+            "INSERT INTO reading_progress (device_id, book_file_id, content_sha256, location, updated_at) \
+             VALUES ('dev', ?1, 'sha', '{}', 1)",
+            [&res.file_id],
+        )
+        .unwrap();
+
+        let staged: String = conn
+            .query_row(
+                "SELECT path FROM book_files WHERE id = ?1",
+                [&res.file_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let cover: String = conn
+            .query_row(
+                "SELECT cover_file FROM works WHERE id = ?1",
+                [&work_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        let removed = delete_works(&mut conn, tmp.path(), std::slice::from_ref(&work_id)).unwrap();
+        assert_eq!(removed, 1);
+        // 二次删除幂等
+        assert_eq!(delete_works(&mut conn, tmp.path(), &[work_id]).unwrap(), 0);
+        for table in ["works", "editions", "book_files", "reading_progress"] {
+            let n: i64 = conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(n, 0, "{table} should be empty");
+        }
+        assert!(
+            !std::path::Path::new(&staged).exists(),
+            "staged copy removed"
+        );
+        assert!(!std::path::Path::new(&cover).exists(), "cover removed");
+        assert!(sample.exists(), "user's original file must survive");
+    }
+
+    #[test]
+    fn delete_works_never_touches_files_outside_managed_dirs() {
+        ensure_samples();
+        let tmp = tempfile::tempdir().unwrap();
+        let mut conn = db::open(tmp.path()).unwrap();
+        let lib = Library::new(tmp.path());
+        let res = lib
+            .import(&mut conn, &ws_samples("txt/utf8-chapters.txt"))
+            .unwrap();
+        // 模拟脏数据/原位引用：把文件记录指向受管目录外的外部文件
+        let outside = tmp.path().join("outside-book.txt");
+        std::fs::write(&outside, b"keep me").unwrap();
+        conn.execute(
+            "UPDATE book_files SET path = ?2 WHERE id = ?1",
+            rusqlite::params![res.file_id, outside.to_string_lossy().to_string()],
+        )
+        .unwrap();
+        let work_id = work_id_of(&conn, &res.file_id).unwrap();
+        delete_works(&mut conn, tmp.path(), &[work_id]).unwrap();
+        assert!(
+            outside.exists(),
+            "files outside books/covers must never be deleted"
+        );
     }
 
     #[test]

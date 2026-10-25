@@ -9,7 +9,7 @@
 
 - 权威需求：`docs/requirements/BOOKVAULT_AI_PROJECT_BRIEF.md`（产品方向以其为准，不得擅自更改其「已确认」决策）。
 - 当前进度：**Phase 1 代码完成（M0–M4 ✅，2026-10-24）**：格式核心、桌面本地闭环（SQLite 三层模型 + 四阅读器 + 进度哈希绑定）、NAS 服务端（配对/书库/流式上传/同步，Docker Compose）、双设备 e2e 同步测试通过；`make check` 全绿。剩余：GUI 人工验证清单（计划 §13）与 P1 及后续阶段。Phase 1 计划：`docs/plans/phase-1-implementation-plan.md`（已确认，三层模型 Work/Edition/BookFile）。
-- 交互移植（参考 Wenku8_Flutter，仅对齐交互、未复制 GPL 代码）：**包 A 阅读器交互 ✅（分页/竖排/翻页动画/逐书记忆，commit `9b61aba`）**；包 B 书架与查找、包 C 书签/听书/动效开关、EPUB 分页适配未做，已知限制与真机验证清单见 `docs/plans/interaction-port-backlog.md`（继续此工作前必读）。
+- 交互移植（参考 Wenku8_Flutter，仅对齐交互、未复制 GPL 代码）：**包 A 阅读器交互 ✅（分页/竖排/翻页动画/逐书记忆，commit `9b61aba`）；包 B 书架与查找 ✅（立体书架 BookCarousel 对齐「发现」页演示 + 列表双模式/多维筛选/批量整理含 delete_works 命令/Ctrl+F 整书查找，2026-10-25，立体形态经负责人确认重做）**；包 C 书签/听书/动效开关、EPUB 分页适配未做，已知限制与真机验证清单见 `docs/plans/interaction-port-backlog.md`（继续此工作前必读）。
 
 ## 沟通约定
 

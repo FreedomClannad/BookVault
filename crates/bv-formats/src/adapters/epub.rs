@@ -71,6 +71,14 @@ impl BookParser for EpubParser {
                 locator: Locator::ZipEntry(href.clone()),
             });
         }
+        // 无 TOC 标题的章节：从正文首段提取（Gutenberg 等工具生成的 EPUB
+        // spine 无 ncx 标题，且首页常是近似空白的包装页，不补标题则
+        // 目录与首屏观感如同「没内容」）
+        for ch in &mut chapters {
+            if ch.title.is_none() {
+                ch.title = derive_title(&mut zip, &ch.id);
+            }
+        }
         if chapters.is_empty() {
             return Err(ParseError::Corrupted {
                 detail: "epub spine has no readable chapter".into(),
@@ -90,6 +98,69 @@ impl BookParser for EpubParser {
             bytes,
         })
     }
+}
+
+/// 从章节 XHTML 开头提取标题：剥 head/标签 → 第一个有意义文本行（≤40 字符）。
+/// Gutenberg 生成的文件正文前有许可头，跳到「*** START OF」标记之后取行。
+/// 提取失败返回 None（保持无标题，UI 回退显示文件名）。
+fn derive_title(zip: &mut SecureZip<Box<dyn SeekRead>>, href: &str) -> Option<String> {
+    let bytes = zip.read_entry(href).ok()?;
+    let head = String::from_utf8_lossy(&bytes[..bytes.len().min(8192)]).to_string();
+    let body = match head.find("<body") {
+        Some(i) => &head[i..],
+        None => &head,
+    };
+    let mut text = strip_tags(body);
+    // 跳过 Gutenberg 许可头：正文从 START 标记行之后开始
+    if let Some((_, after)) = text.split_once("*** START OF THE PROJECT GUTENBERG") {
+        if let Some((_, rest)) = after.split_once("***") {
+            text = rest.to_string();
+        }
+    }
+    for line in text.lines() {
+        let t = line.trim();
+        if t.chars().count() < 2 {
+            continue;
+        }
+        if t.contains("Project Gutenberg")
+            || t.contains("Gutenberg")
+            || t.starts_with("Produced by")
+            || t.starts_with("Transcriber")
+        {
+            continue;
+        }
+        let mut out: String = t.chars().take(40).collect();
+        if t.chars().count() > 40 {
+            out.push('…');
+        }
+        return Some(out);
+    }
+    None
+}
+
+/// 剥掉标签与常见实体，压平为单行文本
+fn strip_tags(html: &str) -> String {
+    let no_tags = {
+        let mut s = String::with_capacity(html.len());
+        let mut in_tag = false;
+        for c in html.chars() {
+            match c {
+                '<' => in_tag = true,
+                '>' => in_tag = false,
+                c if !in_tag => s.push(c),
+                _ => {}
+            }
+        }
+        s
+    };
+    no_tags
+        .replace("&nbsp;", " ")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
 }
 
 // ---------- zip 内文本读取 ----------

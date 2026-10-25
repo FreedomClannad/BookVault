@@ -31,6 +31,7 @@ import {
 } from "react";
 import { COLUMN_GAP, columnCount, sheetCount, sheetGeometry, sheetOffset } from "@bookvault/shared";
 import { api, type ReadingLocation } from "../../app/api";
+import { highlightText } from "./highlight";
 import { FONT_SANS, FONT_SERIF, type ReadingPrefs } from "./readingPrefs";
 
 /** 版心内边距：列文字到「纸边」的留白（分页/竖排模式） */
@@ -57,6 +58,10 @@ interface Props {
   autoScrollPx: number;
   /** 滚动模式自动滚到章末时回调（Reader 决定续章或停止） */
   onAutoEnd?: () => void;
+  /** 查找跳转意图（滚动模式）：seq 变化时滚到章内等比例位置并上报进度 */
+  jump?: { ratio: number; seq: number } | null;
+  /** 查找命中词：正文 mark 高亮（章内查找/跳转后的视觉反馈） */
+  highlight?: string;
 }
 
 export function TxtReader({
@@ -71,6 +76,8 @@ export function TxtReader({
   navSeq,
   autoScrollPx,
   onAutoEnd,
+  jump,
+  highlight,
 }: Props) {
   const init = initial?.type === "chapter" ? initial : null;
   const [text, setText] = useState("");
@@ -80,6 +87,8 @@ export function TxtReader({
   // ---- 滚动模式 ----
   const paneRef = useRef<HTMLDivElement>(null);
   const restoredRef = useRef(false);
+  /** 查找跳转意图按 seq 只消费一次：切章重载正文时旧意图不再触发 */
+  const jumpSeqConsumed = useRef(-1);
 
   // ---- 分页/竖排模式 ----
   const clipRef = useRef<HTMLDivElement>(null);
@@ -165,6 +174,16 @@ export function TxtReader({
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
   }, [paged, autoScrollPx, chapterId]);
+
+  // 查找跳转（仅滚动模式）：正文就绪后滚到等比例位置；进度上报由 scroll 事件驱动
+  useEffect(() => {
+    if (paged || !jump || !text) return;
+    if (jump.seq === jumpSeqConsumed.current) return;
+    jumpSeqConsumed.current = jump.seq;
+    const pane = paneRef.current;
+    if (!pane) return;
+    pane.scrollTop = jump.ratio * Math.max(0, pane.scrollHeight - pane.clientHeight);
+  }, [paged, jump, text]);
 
   // ---- 分页几何 ----
   // 视口宽度：ResizeObserver 跟随窗口/布局变化
@@ -268,7 +287,7 @@ export function TxtReader({
     writingMode: vertical ? "vertical-rl" : "horizontal-tb",
   };
 
-  const contentNode = <>{text}</>;
+  const contentNode = highlightText(text, highlight ?? "");
 
   if (!paged) {
     return (

@@ -1,56 +1,79 @@
 /**
- * 书架视图：书柜分区（在读柜 + 分类柜）+ 3D 书横列（Book3D）。
- * 搜索时退化为平铺网格便于扫读；每本书可改分类 / 设封面（悬停操作）。
+ * 书架视图（包 B）：立体书架 / 封面模块网格双形态（选择记忆到 localStorage）。
+ * 工具栏单行收敛：搜索、筛选+排序弹层（统一自绘组件，替代原生 select）、
+ * 视图切换、整理、导入菜单、设置入口。
+ * 立体模式为 Wenku8「发现」页同款陈列（BookCarousel），作用于当前筛选/搜索
+ * 结果集；批量整理时统一切模块网格多选。
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, type WorkRow } from "../../app/api";
-import { Book3D } from "./Book3D";
-import { CATEGORIES } from "./categories";
+import { BatchBar } from "./BatchBar";
+import { BookCarousel } from "./BookCarousel";
+import { BookList } from "./BookList";
+import { CATEGORIES, FORMAT_LABELS } from "./categories";
+import { ChipGroup, MenuItem, Popover, PopoverSection } from "./ui";
 
 interface Props {
   works: WorkRow[];
+  /** NAS 连接状态（顶栏右侧指示灯） */
+  nasOn: boolean;
   onOpen: (fileId: string) => void;
   onImport: () => void;
   onImportDir: () => void;
-  /** 分类/封面落库后由 App 刷新书库（hasCover、分组都要重读） */
+  /** 打开设置页 */
+  onOpenSettings: () => void;
+  /** 分类/封面/删除落库后由 App 刷新书库（hasCover、分组都要重读） */
   onDataChanged: () => void;
 }
 
-/** 书柜分组：在读（最近读过的前 12 本，仅作快捷入口，可在分类柜重复出现）→ 固定顺序分类 → 未分类 */
-function groupShelves(works: WorkRow[], query: string) {
-  const q = query.trim().toLowerCase();
-  const match = (w: WorkRow) =>
-    !q || w.title.toLowerCase().includes(q) || w.authors.some((a) => a.toLowerCase().includes(q));
+type ViewMode = "shelf" | "list";
+type StatusFilter = "all" | "reading" | "unread";
 
-  const searching = q.length > 0;
-  const readShelf = searching
-    ? []
-    : works
-        .filter((w) => w.lastReadAt)
-        .sort((a, b) => (b.lastReadAt ?? 0) - (a.lastReadAt ?? 0))
-        .slice(0, 12);
-
-  const shelves: { name: string; items: WorkRow[] }[] = [];
-  if (readShelf.length > 0) shelves.push({ name: "在读", items: readShelf });
-
-  const remaining = works.filter((w) => match(w) && !readShelf.includes(w));
-  const uncategorized: WorkRow[] = [];
-  for (const cat of CATEGORIES) {
-    const items = remaining.filter((w) => w.category === cat);
-    if (items.length > 0) shelves.push({ name: cat, items });
-  }
-  for (const w of remaining) {
-    if (w.category === "" || !CATEGORIES.includes(w.category)) uncategorized.push(w);
-  }
-  if (uncategorized.length > 0) shelves.push({ name: "未分类", items: uncategorized });
-  return { searching, shelves };
+interface Filters {
+  /** null=全部；''=未分类 */
+  category: string | null;
+  status: StatusFilter;
+  format: string | null;
 }
 
-export function Library({ works, onOpen, onImport, onImportDir, onDataChanged }: Props) {
+const NO_FILTERS: Filters = { category: null, status: "all", format: null };
+
+function loadViewMode(): ViewMode {
+  return localStorage.getItem("library.viewMode") === "list" ? "list" : "shelf";
+}
+
+/** 三维筛选叠加（AND）；对立体书架、列表与搜索一视同仁，先筛后陈列 */
+function applyFilters(works: WorkRow[], f: Filters): WorkRow[] {
+  return works.filter((w) => {
+    if (f.category !== null && w.category !== f.category) return false;
+    if (f.status === "reading" && !w.lastReadAt) return false;
+    if (f.status === "unread" && w.lastReadAt) return false;
+    if (f.format !== null && !w.files.some((file) => file.format === f.format)) return false;
+    return true;
+  });
+}
+
+export function Library({
+  works,
+  nasOn,
+  onOpen,
+  onImport,
+  onImportDir,
+  onOpenSettings,
+  onDataChanged,
+}: Props) {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<"recent" | "title">("recent");
+  const [viewMode, setViewMode] = useState<ViewMode>(loadViewMode);
+  const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const [toast, setToast] = useState<string | null>(null);
+
+  // 批量整理
+  const [batchOn, setBatchOn] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     if (!toast) return;
@@ -58,24 +81,60 @@ export function Library({ works, onOpen, onImport, onImportDir, onDataChanged }:
     return () => clearTimeout(t);
   }, [toast]);
 
+  const exitBatch = useCallback(() => {
+    setBatchOn(false);
+    setSelected(new Set());
+    setConfirmingDelete(false);
+  }, []);
+
+  // Esc：先关删除确认模态，再退整理模式（ui-style §6 所有操作可键盘完成）
+  useEffect(() => {
+    if (!batchOn) return;
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (confirmingDelete) setConfirmingDelete(false);
+      else exitBatch();
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [batchOn, confirmingDelete, exitBatch]);
+
+  const switchViewMode = (mode: ViewMode) => {
+    setViewMode(mode);
+    localStorage.setItem("library.viewMode", mode);
+  };
+
   const sortedWorks = useMemo(() => {
     const arr = [...works];
     if (sort === "title") arr.sort((a, b) => a.title.localeCompare(b.title, "zh"));
     return arr;
   }, [works, sort]);
 
-  const { searching, shelves } = useMemo(
-    () => groupShelves(sortedWorks, query),
-    [sortedWorks, query],
-  );
+  const filteredWorks = useMemo(() => applyFilters(sortedWorks, filters), [sortedWorks, filters]);
+  const hasActiveFilters =
+    filters.category !== null || filters.status !== "all" || filters.format !== null;
+
+  const searching = query.trim().length > 0;
   const searchHits = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return [];
-    return sortedWorks.filter(
+    return filteredWorks.filter(
       (w) =>
         w.title.toLowerCase().includes(q) || w.authors.some((a) => a.toLowerCase().includes(q)),
     );
-  }, [sortedWorks, query]);
+  }, [filteredWorks, query]);
+
+  /** 当前可见书列：搜索时为命中集，否则为筛选后的全部（三种形态共用） */
+  const pool = searching ? searchHits : filteredWorks;
+
+  /** 书库中实际存在的格式（筛选下拉只给有意义的选项） */
+  const presentFormats = useMemo(
+    () => Array.from(new Set(works.flatMap((w) => w.files.map((f) => f.format)))).sort(),
+    [works],
+  );
+
+  // 整理候选集：与当前可见集合一致（搜索时为命中集，否则为筛选后的全部）
+  const batchPool = searching ? searchHits : filteredWorks;
 
   const setCategory = async (work: WorkRow, category: string) => {
     try {
@@ -91,102 +150,329 @@ export function Library({ works, onOpen, onImport, onImportDir, onDataChanged }:
     onDataChanged();
   };
 
+  const toggleSelect = (workId: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(workId)) next.delete(workId);
+      else next.add(workId);
+      return next;
+    });
+  };
+
+  const applyBatchCategory = async (category: string) => {
+    if (selected.size === 0) return;
+    const ids = [...selected];
+    let failed = 0;
+    for (const id of ids) {
+      try {
+        await api.setWorkCategory(id, category);
+      } catch {
+        failed += 1;
+      }
+    }
+    onDataChanged();
+    setSelected(new Set());
+    setToast(
+      failed > 0
+        ? `已改 ${ids.length - failed} 本分类，${failed} 本失败`
+        : `已把 ${ids.length} 本移到「${category || "未分类"}」`,
+    );
+  };
+
+  const deleteSelected = async () => {
+    if (selected.size === 0) return;
+    const ids = [...selected];
+    setDeleting(true);
+    try {
+      const removed = await api.deleteWorks(ids);
+      onDataChanged();
+      setSelected(new Set());
+      setBatchOn(false);
+      setToast(`已删除 ${removed} 本书`);
+    } catch (e) {
+      setToast(`删除失败: ${String(e)}`);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const listNode = (selecting: boolean) => (
+    <BookList
+      works={pool}
+      selecting={selecting}
+      selectedIds={selected}
+      onToggleSelect={toggleSelect}
+      onOpen={onOpen}
+      onCoverSaved={() => coverSaved("封面已生成")}
+      onCategoryChange={(w, c) => void setCategory(w, c)}
+      onToast={setToast}
+    />
+  );
+
+  const filterCount =
+    (filters.category !== null ? 1 : 0) +
+    (filters.status !== "all" ? 1 : 0) +
+    (filters.format !== null ? 1 : 0);
+
+  const setCategoryFilter = (v: string) =>
+    setFilters((f) => ({
+      ...f,
+      category: v === "__all" ? null : v === "__none" ? "" : v,
+    }));
+
+  const GearIcon = () => (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+      <circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" strokeWidth="1.6" />
+      <path
+        d="M12 3.5v2.2M12 18.3v2.2M4.9 7.8l1.9 1.1M17.2 15.1l1.9 1.1M4.9 16.2l1.9-1.1M17.2 8.9l1.9-1.1"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+      />
+    </svg>
+  );
+
+  const FilterIcon = () => (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+      <path
+        d="M4 6h16M7 12h10M10 18h4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+
   return (
-    <div className="flex-1 overflow-auto">
-      <div className="flex items-baseline gap-3.5 px-9 pb-4 pt-6">
-        <h2 className="m-0 font-display text-2xl font-semibold">书架</h2>
-        <span className="text-[13px] text-muted">{works.length} 种藏书</span>
-        <div className="ml-auto flex items-center gap-2.5">
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* 单一顶栏（合并原顶栏与工具栏）：品牌 + 藏书数 + 全部操作 + NAS 状态。
+          sticky：内容滚动时操作常驻。 */}
+      <div className="sticky top-0 z-30 flex flex-wrap items-center gap-2 border-b border-line bg-paper px-4 py-2.5">
+        <div
+          className="flex h-[26px] w-[26px] flex-none items-center justify-center rounded-[6px] bg-seal font-display text-sm text-[#f6ece8] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.2)]"
+          aria-hidden="true"
+        >
+          书
+        </div>
+        <span className="font-display text-[15px] font-semibold text-fg">BookVault</span>
+        <span className="text-xs text-muted">
+          {hasActiveFilters
+            ? `${filteredWorks.length} / ${works.length} 种藏书`
+            : `${works.length} 种藏书`}
+        </span>
+
+        <div className="ml-auto flex flex-wrap items-center gap-2">
           <input
             type="search"
-            className="input w-52"
+            className="input w-44"
             placeholder="搜索书名或作者"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
-          <select
-            className="input"
-            value={sort}
-            onChange={(e) => setSort(e.target.value as "recent" | "title")}
-            aria-label="排序"
+
+          <Popover label="筛选" icon={<FilterIcon />} badge={filterCount} active={filterCount > 0}>
+            <PopoverSection label="分类">
+              <ChipGroup
+                options={[
+                  { v: "__all", label: "全部" },
+                  { v: "__none", label: "未分类" },
+                  ...CATEGORIES.map((c) => ({ v: c, label: c })),
+                ]}
+                value={
+                  filters.category === null
+                    ? "__all"
+                    : filters.category === ""
+                      ? "__none"
+                      : filters.category
+                }
+                onChange={setCategoryFilter}
+              />
+            </PopoverSection>
+            <PopoverSection label="阅读状态">
+              <ChipGroup
+                options={[
+                  { v: "all", label: "全部" },
+                  { v: "reading", label: "在读" },
+                  { v: "unread", label: "未读" },
+                ]}
+                value={filters.status}
+                onChange={(v) => setFilters((f) => ({ ...f, status: v as StatusFilter }))}
+              />
+            </PopoverSection>
+            <PopoverSection label="格式">
+              <ChipGroup
+                options={[
+                  { v: "__all", label: "全部" },
+                  ...presentFormats.map((fmt) => ({
+                    v: fmt,
+                    label: FORMAT_LABELS[fmt] ?? fmt.toUpperCase(),
+                  })),
+                ]}
+                value={filters.format ?? "__all"}
+                onChange={(v) => setFilters((f) => ({ ...f, format: v === "__all" ? null : v }))}
+              />
+            </PopoverSection>
+            <PopoverSection label="排序">
+              <ChipGroup
+                options={[
+                  { v: "recent", label: "最近阅读" },
+                  { v: "title", label: "书名" },
+                ]}
+                value={sort}
+                onChange={(v) => setSort(v as "recent" | "title")}
+              />
+            </PopoverSection>
+          </Popover>
+
+          <div
+            className="flex overflow-hidden rounded-md border border-line"
+            role="group"
+            aria-label="视图模式"
           >
-            <option value="recent">柜内按最近阅读</option>
-            <option value="title">柜内按书名</option>
-          </select>
-          <button className="btn" onClick={onImportDir}>
-            导入文件夹
+            {(["shelf", "list"] as ViewMode[]).map((m) => (
+              <button
+                key={m}
+                type="button"
+                className={`px-2.5 py-[7px] text-[13px] transition-colors ${viewMode === m ? "bg-fg text-paper" : "text-muted hover:bg-paper-raised"}`}
+                aria-pressed={viewMode === m}
+                onClick={() => switchViewMode(m)}
+              >
+                {m === "shelf" ? "立体" : "列表"}
+              </button>
+            ))}
+          </div>
+
+          <button
+            className={`btn px-2.5 py-[7px] text-[13px] ${batchOn ? "btn-primary" : ""}`}
+            onClick={() => (batchOn ? exitBatch() : setBatchOn(true))}
+            disabled={works.length === 0}
+          >
+            {batchOn ? "完成整理" : "整理"}
           </button>
-          <button className="btn btn-primary" onClick={onImport}>
-            导入书籍
+
+          <Popover label="导入" primary panelClassName="w-48">
+            {(close) => (
+              <>
+                <MenuItem
+                  onClick={() => {
+                    close();
+                    onImport();
+                  }}
+                >
+                  导入书籍文件…
+                </MenuItem>
+                <MenuItem
+                  onClick={() => {
+                    close();
+                    onImportDir();
+                  }}
+                >
+                  导入文件夹…
+                </MenuItem>
+              </>
+            )}
+          </Popover>
+
+          <button
+            className="btn px-2.5 py-[7px] text-[13px]"
+            title="设置"
+            aria-label="设置"
+            onClick={onOpenSettings}
+          >
+            <GearIcon />
+            设置
           </button>
+
+          <span className="h-5 w-px flex-none bg-line" aria-hidden="true" />
+          <div
+            title={nasOn ? "NAS 已连接" : "NAS 未连接"}
+            className={`flex items-center gap-1.5 text-xs ${nasOn ? "text-fg" : "text-muted"}`}
+          >
+            <span
+              className={`h-[7px] w-[7px] rounded-full ${nasOn ? "bg-[#58a97a]" : "bg-line"}`}
+            />
+            <span className="hidden lg:inline">{nasOn ? "NAS 已连接" : "NAS 未连接"}</span>
+          </div>
         </div>
       </div>
 
-      {searching ? (
-        searchHits.length === 0 ? (
-          <EmptyState query={query} />
+      <div className="min-h-0 flex-1 overflow-auto">
+        {works.length === 0 ? (
+          <EmptyState query="" />
+        ) : pool.length === 0 ? (
+          filteredWorks.length === 0 ? (
+            <EmptyState query={query} onClearFilters={() => setFilters(NO_FILTERS)} filtered />
+          ) : (
+            <EmptyState
+              query={query}
+              onClearFilters={hasActiveFilters ? () => setFilters(NO_FILTERS) : undefined}
+            />
+          )
+        ) : batchOn ? (
+          // 整理模式统一用模块网格多选（两种视图形态一致）
+          listNode(true)
+        ) : viewMode === "list" ? (
+          listNode(false)
         ) : (
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-x-6 gap-y-8 px-9 pb-12">
-            {searchHits.map((w) => (
-              <Book3D
-                key={w.id}
-                work={w}
-                onOpen={() => w.files[0] && onOpen(w.files[0].id)}
-                onCoverSaved={() => coverSaved("封面已生成")}
-                onCategoryChange={(c) => void setCategory(w, c)}
-                onToast={setToast}
-              />
-            ))}
-          </div>
-        )
-      ) : shelves.length === 0 ? (
-        <EmptyState query={query} />
-      ) : (
-        shelves.map((shelf) => (
-          <section key={shelf.name} className="mb-3">
-            <div className="flex items-baseline gap-2.5 px-9">
-              <h3 className="m-0 font-display text-[15px] font-semibold">{shelf.name}</h3>
-              <span className="text-xs text-muted">{shelf.items.length} 本</span>
-            </div>
-            <div className="bookshelf" role="list" aria-label={`${shelf.name}书柜`}>
-              {shelf.items.map((w) => (
-                <div key={w.id} role="listitem">
-                  <Book3D
-                    work={w}
-                    onOpen={() => w.files[0] && onOpen(w.files[0].id)}
-                    onCoverSaved={() => coverSaved("封面已生成")}
-                    onCategoryChange={(c) => void setCategory(w, c)}
-                    onToast={setToast}
-                  />
-                </div>
-              ))}
-            </div>
-            <div className="shelf-board" aria-hidden="true" />
-          </section>
-        ))
-      )}
+          <BookCarousel
+            works={pool}
+            onOpen={onOpen}
+            onCoverSaved={() => coverSaved("封面已生成")}
+          />
+        )}
 
-      {toast && (
-        <div className="fixed bottom-7 left-1/2 z-50 -translate-x-1/2 rounded-lg bg-chrome-deep px-5 py-2.5 text-sm text-chrome-fg shadow-2">
-          {toast}
-        </div>
-      )}
+        {batchOn && (
+          <BatchBar
+            poolSize={batchPool.length}
+            selectedSize={selected.size}
+            onSelectAll={() => setSelected(new Set(batchPool.map((w) => w.id)))}
+            onClearSelection={() => setSelected(new Set())}
+            onApplyCategory={(c) => void applyBatchCategory(c)}
+            onDelete={() => void deleteSelected()}
+            onDone={exitBatch}
+            deleting={deleting}
+            confirming={confirmingDelete}
+            onConfirmingChange={setConfirmingDelete}
+          />
+        )}
+
+        {toast && (
+          <div className="fixed bottom-7 left-1/2 z-50 -translate-x-1/2 rounded-lg bg-chrome-deep px-5 py-2.5 text-sm text-chrome-fg shadow-2">
+            {toast}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
-function EmptyState({ query }: { query: string }) {
+function EmptyState({
+  query,
+  filtered,
+  onClearFilters,
+}: {
+  query: string;
+  /** 筛选/搜索无命中（书库非空） */
+  filtered?: boolean;
+  onClearFilters?: () => void;
+}) {
   return (
     <div className="flex h-full min-h-80 flex-col items-center justify-center gap-2.5 text-muted">
       <div className="mb-2 flex h-[84px] w-[84px] items-center justify-center rounded-[18px] border-[1.5px] border-line font-display text-[42px]">
         书
       </div>
       <div className="font-display text-[17px] text-fg">
-        {query ? "没有匹配的书" : "书架还是空的"}
+        {filtered || query ? "没有匹配的书" : "书架还是空的"}
       </div>
       <div className="text-[13px]">
-        {query ? "换个关键词试试" : "把书籍文件拖进窗口，或点「导入书籍」"}
+        {filtered || query ? "换个关键词或筛选条件试试" : "把书籍文件拖进窗口，或点「导入书籍」"}
       </div>
+      {(filtered || query) && onClearFilters && (
+        <button className="btn mt-1.5" onClick={onClearFilters}>
+          清除筛选
+        </button>
+      )}
     </div>
   );
 }
