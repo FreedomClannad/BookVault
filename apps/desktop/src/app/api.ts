@@ -196,9 +196,21 @@ const mockWorks: WorkRow[] = [
 ];
 const mockWorkLegacy = mockWorks[0];
 
-const mockChapterText = (id: string) =>
-  `${id === "ch-0" ? "第一章 演示" : "第二章 演示"}\n\n` +
-  "山不在高，有仙则名。水不在深，有龙则灵。\n".repeat(10);
+const mockChapterText = (id: string) => {
+  // 章节序号由 id 推导（ch-0 / OEBPS/ch1.xhtml…），保证相邻章节内容必不相同
+  const m = /ch-?(\d+)/.exec(id);
+  const no = m ? Number(m[1]) + 1 : 1;
+  const zh = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十"][no - 1] ?? String(no);
+  const title = `第${zh}章 演示`;
+  // EPUB mock（zip_entry 定位）走 HTML 语义：\n 不换行，用段落撑起可滚动篇幅
+  if (id.endsWith(".xhtml")) {
+    return (
+      `<h2>${title}</h2>` +
+      Array.from({ length: 30 }, () => "<p>山不在高，有仙则名。水不在深，有龙则灵。</p>").join("")
+    );
+  }
+  return `${title}\n\n` + "山不在高，有仙则名。水不在深，有龙则灵。\n".repeat(10);
+};
 
 // ---------- 对外 API ----------
 
@@ -247,23 +259,45 @@ export const api = {
 
   async openBook(fileId: string): Promise<OpenedBook> {
     if (!hasTauri) {
+      // openBook 收到的是 fileId（<workId>-fN），按文件反查所属 mock 作品
+      const work = mockWorks.find((w) => w.files[0]?.id === fileId) ?? mockWorkLegacy;
+      const isEpub = work.files[0].format === "epub";
       return {
-        workId: mockWorkLegacy.id,
-        file: mockWorkLegacy.files[0],
+        workId: work.id,
+        file: work.files[0],
         parsedSha256: "0".repeat(64),
         book: {
-          kind: "txt",
+          kind: isEpub ? "epub" : "txt",
           sha256: "0".repeat(64),
           parser: { parser: "mock", version: "0" },
           metadata: {
-            title: "演示之书",
-            authors: ["BookVault"],
+            title: work.title,
+            authors: work.authors,
             description: null,
             language: "zh",
             identifiers: [],
             coverRef: null,
           },
-          contents: { novel: { chapters: MOCK_CHAPTERS, encoding: "UTF-8" } },
+          contents: {
+            novel: {
+              // EPUB mock 用 zip_entry 定位（EpubReader 按 href 再 getResource）
+              chapters: isEpub
+                ? [
+                    {
+                      id: "OEBPS/ch1.xhtml",
+                      title: "第一章 演示",
+                      locator: { zip_entry: "OEBPS/ch1.xhtml" },
+                    },
+                    {
+                      id: "OEBPS/ch2.xhtml",
+                      title: "第二章 演示",
+                      locator: { zip_entry: "OEBPS/ch2.xhtml" },
+                    },
+                  ]
+                : MOCK_CHAPTERS,
+              encoding: "UTF-8",
+            },
+          },
         },
         progress: [],
         hashDrift: false,

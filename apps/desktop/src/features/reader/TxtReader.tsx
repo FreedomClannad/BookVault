@@ -18,20 +18,24 @@
  *
  * 进度统一为章内 0..1 比例：滚动模式沿用滚动比，分页模式屏号↔比例互转
  * （shared），进度模型与存储不变（ADR-003）。沉浸式不含工具栏：章节、页码、
- * 排版全部由 Reader 层受控（ADR-002）。
+ * 排版全部由 Reader 层受控（ADR-002）。滚动模式对外暴露 ScrollPager 翻页原语
+ * （按屏推进，见 pager.ts），Reader 层据此实现「先翻内容、到边界才跨章」。
  */
 
 import {
   useCallback,
   useEffect,
+  useImperativeHandle,
   useRef,
   useState,
   type CSSProperties,
   type ReactNode,
+  type Ref,
 } from "react";
 import { COLUMN_GAP, columnCount, sheetCount, sheetGeometry, sheetOffset } from "@bookvault/shared";
 import { api, type ReadingLocation } from "../../app/api";
 import { highlightText } from "./highlight";
+import type { ScrollPager } from "./pager";
 import { FONT_SANS, FONT_SERIF, type ReadingPrefs } from "./readingPrefs";
 
 /** 版心内边距：列文字到「纸边」的留白（分页/竖排模式） */
@@ -78,7 +82,8 @@ export function TxtReader({
   onAutoEnd,
   jump,
   highlight,
-}: Props) {
+  ref,
+}: Props & { ref?: Ref<ScrollPager> }) {
   const init = initial?.type === "chapter" ? initial : null;
   const [text, setText] = useState("");
   const paged = prefs.pageMode !== "scroll";
@@ -89,6 +94,41 @@ export function TxtReader({
   const restoredRef = useRef(false);
   /** 查找跳转意图按 seq 只消费一次：切章重载正文时旧意图不再触发 */
   const jumpSeqConsumed = useRef(-1);
+  /** 当前正文所属章节：切章瞬间旧正文还在 state 里，跳转意图必须等新正文就绪再消费 */
+  const textChapterRef = useRef<string | null>(null);
+  /**
+   * 章节加载完成计数：相邻两章文本完全相同时 setText 会被 React 判定无变化而
+   * 整批 bailout，依赖 text 的 effect 不会重跑——用必然变化的计数触发消费检查。
+   */
+  const [loadTick, setLoadTick] = useState(0);
+
+  // 滚动模式翻页原语（Reader 层据此「先按屏推进、到边界才跨章」，见 pager.ts）；
+  // 内容未就绪时吞掉翻页（返回 true），避免把加载中的章节误判为章末而跳章
+  useImperativeHandle(ref, () => ({
+    pageDown: () => {
+      if (paged) return true;
+      const pane = paneRef.current;
+      if (!pane || textChapterRef.current !== chapterId) return true;
+      const max = pane.scrollHeight - pane.clientHeight;
+      if (pane.scrollTop >= max - 1) return false;
+      pane.scrollTo({
+        top: Math.min(max, pane.scrollTop + pane.clientHeight),
+        behavior: "smooth",
+      });
+      return true;
+    },
+    pageUp: () => {
+      if (paged) return true;
+      const pane = paneRef.current;
+      if (!pane || textChapterRef.current !== chapterId) return true;
+      if (pane.scrollTop <= 1) return false;
+      pane.scrollTo({
+        top: Math.max(0, pane.scrollTop - pane.clientHeight),
+        behavior: "smooth",
+      });
+      return true;
+    },
+  }));
 
   // ---- 分页/竖排模式 ----
   const clipRef = useRef<HTMLDivElement>(null);
@@ -116,10 +156,18 @@ export function TxtReader({
     void api
       .getResource(fileId, chapterId)
       .then((bytes) => {
-        if (!cancelled) setText(new TextDecoder().decode(bytes));
+        if (!cancelled) {
+          textChapterRef.current = chapterId;
+          setText(new TextDecoder().decode(bytes));
+          setLoadTick((n) => n + 1);
+        }
       })
       .catch((e) => {
-        if (!cancelled) setText(`（章节读取失败: ${String(e)}）`);
+        if (!cancelled) {
+          textChapterRef.current = chapterId;
+          setText(`（章节读取失败: ${String(e)}）`);
+          setLoadTick((n) => n + 1);
+        }
       });
     return () => {
       cancelled = true;
@@ -175,15 +223,19 @@ export function TxtReader({
     return () => cancelAnimationFrame(raf);
   }, [paged, autoScrollPx, chapterId]);
 
-  // 查找跳转（仅滚动模式）：正文就绪后滚到等比例位置；进度上报由 scroll 事件驱动
+  // 查找/回退跳转（仅滚动模式）：正文就绪后滚到等比例位置；进度上报由 scroll 事件驱动。
+  // 章节归属守卫：switchChapter 同一批更新里 chapterId 已是新章而 text 还是旧章正文，
+  // 此时不得消费意图（否则跨章跳转会被旧正文吞掉、新章停回章首——滚动模式查找跳章曾踩
+  // 此坑）。loadTick：相邻两章内容完全相同时 setText 判定无变化不重渲染，靠它重跑。
   useEffect(() => {
     if (paged || !jump || !text) return;
+    if (textChapterRef.current !== chapterId) return;
     if (jump.seq === jumpSeqConsumed.current) return;
     jumpSeqConsumed.current = jump.seq;
     const pane = paneRef.current;
     if (!pane) return;
     pane.scrollTop = jump.ratio * Math.max(0, pane.scrollHeight - pane.clientHeight);
-  }, [paged, jump, text]);
+  }, [paged, jump, text, chapterId, loadTick]);
 
   // ---- 分页几何 ----
   // 视口宽度：ResizeObserver 跟随窗口/布局变化

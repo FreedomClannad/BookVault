@@ -1,22 +1,30 @@
 /**
  * 统一阅读器框架（沉浸式）：阅读时全窗口接管、正文铺满，不再有常驻侧栏与双层工具栏。
- * 交互模型（ui-style §1「工具栏自动隐藏，交互时浮现」）：
+ * 交互模型（ui-style §1「工具栏自动隐藏，交互时浮现」+ 电子书式点击分区）：
  * - 底部悬浮工具栏：鼠标移动/点击唤出，静止 2.5s 淡出；悬停或抽屉/面板打开时不隐藏；
+ *   点正文中部（TXT）可显隐工具栏（隐藏期间 mousemove 不再唤出，再点中部恢复）；
+ * - 电子书式点击分区（小说）：左 ⅓ 上一页、右 ⅓ 下一页；TXT 由容器指针事件判区
+ *   （拖拽选词不触发翻页），EPUB 因 iframe 吞事件改用左右覆盖条；分页/竖排模式
+ *   滚轮即翻屏，滚动模式与 EPUB 保留原生滚轮；
+ * - 翻页语义按内容对齐：分页/竖排先章内翻屏、章末才跨章；滚动模式经 ScrollPager
+ *   （pager.ts）先按屏推进、到章首/章末才跨章（跨上一章时落在章尾衔接）；
  * - 章节目录/书签/页码跳转：右侧滑出抽屉（覆盖式，不挤压正文）；
  * - 查找（包 B-4）：Ctrl/Cmd+F 或工具栏唤出右侧抽屉，TXT/EPUB 整书跨章检索；
- *   命中点击跳章定位——分页模式换算屏号、滚动模式滚到等比位置；TXT 正文 mark 高亮；
- * - 键盘：←/→ 翻章/翻页（PgUp/PgDn 同向），空格仅用于漫画与 PDF，小说保留空格滚屏；
+ *   命中点击跳章定位——分页模式换算屏号、滚动模式滚到章内等比位置；TXT 正文 mark 高亮；
+ * - 键盘：←/→ 翻页（内容对齐，同上），PgUp/PgDn 同向；空格仅用于漫画与 PDF；
  * - 小说分页/竖排（Wenku8 式交互）：页码导航状态上提至此（ADR-002），翻页动画由
  *   TxtReader 呈现；排版面板按书记忆（readingPrefs 两层：全局默认 + 按书覆盖）。
  * 进度保存绑定内容哈希（ADR-003），卸载时立即落盘；分页屏号与章内比例互转后存取。
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from "react";
 import { sheetFromProgress, sheetToProgress } from "@bookvault/shared";
 import { api, type OpenedBook, type ReadingLocation } from "../../app/api";
 import { ComicReader, type ComicFit } from "./ComicReader";
 import { EpubReader } from "./EpubReader";
 import { PdfReader } from "./PdfReader";
+import type { ScrollPager } from "./pager";
 import { SearchPanel } from "./SearchPanel";
 import { TxtReader } from "./TxtReader";
 import { isTypingTarget } from "./keyboard";
@@ -229,6 +237,8 @@ export function Reader({ fileId, onExit }: Props) {
   const [driftDismissed, setDriftDismissed] = useState(false);
   const [prefs, setPrefs] = useState<ReadingPrefs>(loadReadingPrefs);
   const [chromeVisible, setChromeVisible] = useState(true);
+  /** 用户点正文中部显隐工具栏：隐藏期间 mousemove 不再唤出（电子书式，再点中部恢复） */
+  const chromeHiddenRef = useRef(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [themePopOpen, setThemePopOpen] = useState(false);
   const [typoOpen, setTypoOpen] = useState(false);
@@ -267,6 +277,17 @@ export function Reader({ fileId, onExit }: Props) {
   const restoreRatioRef = useRef<number | null>(null);
   const pendingTailRef = useRef(false);
 
+  // 滚动模式小说（TXT/EPUB）的按屏翻页原语；同一时刻只挂载其一（见 pager.ts）
+  const txtPagerRef = useRef<ScrollPager | null>(null);
+  const epubPagerRef = useRef<ScrollPager | null>(null);
+
+  // 电子书式点击分区（仅小说）：pointerdown/up 判定「点按」与「拖拽选词」
+  const pointerStart = useRef<{ x: number; y: number; t: number } | null>(null);
+  // 分页/竖排模式滚轮翻页：累计滚距过阈值翻一屏，动画期间不叠加
+  const wheelAcc = useRef(0);
+  const wheelDir = useRef(0);
+  const lastWheelNav = useRef(0);
+
   const lastSave = useRef<ReadingLocation | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -294,8 +315,12 @@ export function Reader({ fileId, onExit }: Props) {
     pendingTailRef.current = false;
   }, [workId]);
 
+  // 「分页/竖排」导航语义仅限 TXT——EPUB 恒为滚动渲染（§3），若也判成 paged，
+  // sheets 恒为 0 会让每次翻页直接跳章（ScrollPager 永远不被咨询，实测踩坑）
+  const isTxtNovel = Boolean(chapters) && opened?.file.format === "txt";
+  const isEpubNovel = Boolean(chapters) && opened?.file.format === "epub";
   const novelPaged =
-    Boolean(chapters) && (prefs.pageMode === "paged" || prefs.pageMode === "vertical");
+    Boolean(isTxtNovel) && (prefs.pageMode === "paged" || prefs.pageMode === "vertical");
 
   useEffect(() => {
     let cancelled = false;
@@ -378,17 +403,25 @@ export function Reader({ fileId, onExit }: Props) {
       if (!chapters) return;
       const i = Math.min(chapters.length - 1, Math.max(0, idx));
       setChapterIdx(i);
-      // 布局量测后的一次性意图：tail=回到上一章末屏；ratio=查找跳转；否则置顶
+      // 布局量测后的一次性意图：tail=回到上一章末尾；ratio=查找跳转；否则置顶
       pendingTailRef.current = Boolean(opts?.tail) && novelPaged;
       restoreRatioRef.current = opts?.ratio != null && novelPaged ? opts.ratio : null;
       if (opts?.ratio != null) {
         jumpSeqRef.current += 1;
         setScrollJump({ ratio: opts.ratio, seq: jumpSeqRef.current });
+      } else if (opts?.tail && !novelPaged) {
+        // 滚动模式跨章上翻：正文/文档就绪后滚到上一章末尾（内容衔接，复用跳转通道）
+        jumpSeqRef.current += 1;
+        setScrollJump({ ratio: 1, seq: jumpSeqRef.current });
       }
       setNovelPage(0);
       setSheets(0);
       setNavSeq((s) => s + 1);
-      save({ type: "chapter", chapterId: chapters[i].id, progress: 0 });
+      save({
+        type: "chapter",
+        chapterId: chapters[i].id,
+        progress: opts?.tail && !novelPaged ? 1 : 0,
+      });
     },
     [chapters, novelPaged, save],
   );
@@ -444,8 +477,13 @@ export function Reader({ fileId, onExit }: Props) {
 
   const navPrev = useCallback(() => {
     if (chapters) {
-      if (novelPaged && novelPage > 0) {
-        setNovelPage((p) => p - 1);
+      if (novelPaged) {
+        if (novelPage > 0) {
+          setNovelPage((p) => p - 1);
+          return;
+        }
+      } else if ((txtPagerRef.current ?? epubPagerRef.current)?.pageUp()) {
+        // 滚动模式（TXT/EPUB）：先按屏上翻；已在章首才跨章
         return;
       }
       if (chapterIdx > 0) switchChapter(chapterIdx - 1, { tail: true });
@@ -460,8 +498,13 @@ export function Reader({ fileId, onExit }: Props) {
 
   const navNext = useCallback(() => {
     if (chapters) {
-      if (novelPaged && novelPage < sheets - 1) {
-        setNovelPage((p) => p + 1);
+      if (novelPaged) {
+        if (novelPage < sheets - 1) {
+          setNovelPage((p) => p + 1);
+          return;
+        }
+      } else if ((txtPagerRef.current ?? epubPagerRef.current)?.pageDown()) {
+        // 滚动模式（TXT/EPUB）：先按屏下翻；已在章末才跨章
         return;
       }
       if (chapterIdx < chapters.length - 1) switchChapter(chapterIdx + 1);
@@ -484,6 +527,46 @@ export function Reader({ fileId, onExit }: Props) {
     comicNav,
   ]);
 
+  // ---- 悬浮工具栏自动隐藏 ----
+  const showChrome = useCallback(() => {
+    // 用户点正文中部隐藏后，mousemove 不再唤出（再点中部或打开浮层才恢复）
+    if (chromeHiddenRef.current) return;
+    setChromeVisible(true);
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    hideTimer.current = setTimeout(() => {
+      if (!hoverChrome.current && !overlayOpen.current) setChromeVisible(false);
+    }, CHROME_HIDE_DELAY_MS);
+  }, []);
+
+  /** 正文中部点击：切换工具栏显隐（电子书式；鼠标移动不破坏该状态） */
+  const toggleChrome = useCallback(() => {
+    const next = !chromeHiddenRef.current;
+    chromeHiddenRef.current = next;
+    if (next) {
+      setChromeVisible(false);
+      if (hideTimer.current) clearTimeout(hideTimer.current);
+    } else {
+      showChrome();
+    }
+  }, [showChrome]);
+
+  useEffect(() => {
+    showChrome();
+    window.addEventListener("mousemove", showChrome);
+    return () => {
+      window.removeEventListener("mousemove", showChrome);
+      if (hideTimer.current) clearTimeout(hideTimer.current);
+    };
+  }, [showChrome]);
+
+  // 浮层打开期间强制可见（解除中键隐藏）并保持，关闭后重新计时
+  useEffect(() => {
+    if (drawerOpen || themePopOpen || typoOpen) {
+      chromeHiddenRef.current = false;
+      showChrome();
+    }
+  }, [drawerOpen, themePopOpen, typoOpen, showChrome]);
+
   // 统一键盘导航；Esc 关闭浮层。EPUB iframe 内的按键不冒泡到本层（历史限制）
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -501,12 +584,17 @@ export function Reader({ fileId, onExit }: Props) {
         else if (typoOpen) setTypoOpen(false);
         else if (themePopOpen) setThemePopOpen(false);
         else if (drawerOpen) setDrawerOpen(false);
+        else if (chromeHiddenRef.current) {
+          // 安全出口：中键隐藏的工具栏，Esc 也能唤回
+          chromeHiddenRef.current = false;
+          showChrome();
+        }
         return;
       }
       if (e.key === "ArrowRight") navNext();
       if (e.key === "ArrowLeft") navPrev();
-      // PgUp/PgDn 仅在翻页语义下劫持；小说滚动模式留给浏览器默认滚动
-      const pagedNav = novelPaged || Boolean(pdfDoc) || Boolean(comicDoc);
+      // PgUp/PgDn 劫持为翻页（TXT 分页/滚动按屏、EPUB 按屏、PDF/漫画按页）
+      const pagedNav = novelPaged || isEpubNovel || Boolean(pdfDoc) || Boolean(comicDoc);
       if (e.key === "PageDown" && pagedNav) {
         e.preventDefault();
         navNext();
@@ -531,32 +619,11 @@ export function Reader({ fileId, onExit }: Props) {
     searchOpen,
     searchable,
     novelPaged,
+    isEpubNovel,
     pdfDoc,
     comicDoc,
+    showChrome,
   ]);
-
-  // ---- 悬浮工具栏自动隐藏 ----
-  const showChrome = useCallback(() => {
-    setChromeVisible(true);
-    if (hideTimer.current) clearTimeout(hideTimer.current);
-    hideTimer.current = setTimeout(() => {
-      if (!hoverChrome.current && !overlayOpen.current) setChromeVisible(false);
-    }, CHROME_HIDE_DELAY_MS);
-  }, []);
-
-  useEffect(() => {
-    showChrome();
-    window.addEventListener("mousemove", showChrome);
-    return () => {
-      window.removeEventListener("mousemove", showChrome);
-      if (hideTimer.current) clearTimeout(hideTimer.current);
-    };
-  }, [showChrome]);
-
-  // 浮层打开期间保持可见，关闭后重新计时
-  useEffect(() => {
-    if (drawerOpen || themePopOpen || typoOpen) showChrome();
-  }, [drawerOpen, themePopOpen, typoOpen, showChrome]);
 
   // 打开抽屉时把当前章节/页滚到可视区
   useEffect(() => {
@@ -586,16 +653,69 @@ export function Reader({ fileId, onExit }: Props) {
     [novelPaged, sheets, novelPage, updatePrefs],
   );
 
-  // 自动阅读：分页/PDF/漫画按 interval 翻页；小说滚动模式换算 px/s 由 TxtReader rAF 驱动
+  // ---- 电子书式点击分区（仅小说；TXT 用容器指针事件判区，EPUB 由覆盖条处理）----
+  const onBodyPointerDown = useCallback((e: ReactPointerEvent) => {
+    if (e.button !== 0) return;
+    pointerStart.current = { x: e.clientX, y: e.clientY, t: performance.now() };
+  }, []);
+
+  const onBodyPointerUp = useCallback(
+    (e: ReactPointerEvent) => {
+      const start = pointerStart.current;
+      pointerStart.current = null;
+      // 仅 TXT 用容器判区：EPUB 的 iframe 吞事件，点击由覆盖条处理（避免双重翻页）
+      if (!start || e.button !== 0 || !isTxtNovel) return;
+      // 拖拽/框选文字不是翻页：位移过大、按住过久或已有选区都忽略
+      if (performance.now() - start.t > 500) return;
+      if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > 6) return;
+      if ((window.getSelection()?.toString().length ?? 0) > 0) return;
+      const rect = e.currentTarget.getBoundingClientRect();
+      // 滚动模式右缘是原生滚动条的地盘：邻近带（24px）的点击不算翻页，
+      // 想拖滚动条/点到滚动条旁边时不至于误触翻页（分页模式无滚动条，不受影响）
+      if (!novelPaged && rect.right - e.clientX <= 24) return;
+      const rel = (e.clientX - rect.left) / Math.max(1, rect.width);
+      if (rel < 1 / 3) navPrev();
+      else if (rel > 2 / 3) navNext();
+      else toggleChrome();
+    },
+    [isTxtNovel, novelPaged, navPrev, navNext, toggleChrome],
+  );
+
+  // 分页/竖排模式的滚轮翻页；滚动模式与 EPUB 不拦截（保留原生滚动）
+  const onBodyWheel = useCallback(
+    (e: ReactWheelEvent) => {
+      if (!novelPaged || sheets <= 0) return;
+      const now = performance.now();
+      if (now - lastWheelNav.current < prefs.animSpeed + 150) return;
+      // deltaMode：1=行 2=页，归一到像素后再累计
+      const dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
+      if (Math.sign(dy) !== wheelDir.current) {
+        wheelAcc.current = 0;
+        wheelDir.current = Math.sign(dy);
+      }
+      wheelAcc.current += dy;
+      if (Math.abs(wheelAcc.current) >= 90) {
+        const forward = wheelAcc.current > 0;
+        wheelAcc.current = 0;
+        lastWheelNav.current = now;
+        if (forward) navNext();
+        else navPrev();
+      }
+    },
+    [novelPaged, sheets, prefs.animSpeed, navNext, navPrev],
+  );
+
+  // 自动阅读：TXT 滚动模式换算 px/s 由 TxtReader rAF 驱动；其余（分页/竖排、EPUB、
+  // PDF、漫画）按 interval 逐屏/逐页推进（EPUB 的 navNext 经 ScrollPager 按屏滚动）
   const autoScrollPx =
-    autoOn && chapters && !novelPaged ? Math.round(900 / Math.max(2, prefs.autoSec)) : 0;
+    autoOn && isTxtNovel && !novelPaged ? Math.round(900 / Math.max(2, prefs.autoSec)) : 0;
 
   useEffect(() => {
     if (!autoOn) return;
-    if (chapters && !novelPaged) return; // 滚动模式走 TxtReader 的 rAF 自动滚动
+    if (isTxtNovel && !novelPaged) return; // TXT 滚动模式走 TxtReader 的 rAF 自动滚动
     const iv = setInterval(() => navNext(), Math.max(2, prefs.autoSec) * 1000);
     return () => clearInterval(iv);
-  }, [autoOn, chapters, novelPaged, navNext, prefs.autoSec]);
+  }, [autoOn, isTxtNovel, novelPaged, navNext, prefs.autoSec]);
 
   // 自动阅读到全书末页即停（滚动模式小说由 handleAutoEnd 在最后一章末尾停止）。
   // sheets>0 守卫：切章瞬间 sheets 被重置为 0，不视为「末页」
@@ -686,12 +806,14 @@ export function Reader({ fileId, onExit }: Props) {
 
   const latest = opened.progress[0]?.location ?? null;
   const showDrift = opened.hashDrift && !driftDismissed && opened.progress.length > 0;
+  const epubStrip = isEpubNovel; // EPUB 的 iframe 吞事件，点击分区只能用覆盖条实现
 
   const body = (() => {
     const c = opened.book.contents;
     if ("novel" in c && opened.file.format === "txt") {
       return (
         <TxtReader
+          ref={txtPagerRef}
           fileId={fileId}
           chapterId={c.novel.chapters[chapterIdx]?.id ?? ""}
           initial={latest}
@@ -711,6 +833,7 @@ export function Reader({ fileId, onExit }: Props) {
     if ("novel" in c) {
       return (
         <EpubReader
+          ref={epubPagerRef}
           fileId={fileId}
           chapters={c.novel.chapters}
           chapterId={c.novel.chapters[chapterIdx]?.id ?? ""}
@@ -789,9 +912,9 @@ export function Reader({ fileId, onExit }: Props) {
         {chapters && (
           <>
             <ChromeBtn
-              title="上一章"
+              title="上一章（落到上一章末尾）"
               disabled={chapterIdx <= 0}
-              onClick={() => switchChapter(chapterIdx - 1)}
+              onClick={() => switchChapter(chapterIdx - 1, { tail: true })}
             >
               上一章
             </ChromeBtn>
@@ -1107,7 +1230,35 @@ export function Reader({ fileId, onExit }: Props) {
       style={{ background: prefs.theme.bg }}
       onClick={showChrome}
     >
-      {body}
+      {/* 正文区：点击分区（左 ⅓ 上翻 / 右 ⅓ 下翻 / 中部显隐工具栏，TXT）与滚轮翻页在此层捕获；
+          点击不再冒泡唤出工具栏——翻页不应带出菜单，工具栏由 mousemove 自动显隐 */}
+      <div
+        className="relative flex min-h-0 flex-1"
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={onBodyPointerDown}
+        onPointerUp={onBodyPointerUp}
+        onWheel={onBodyWheel}
+      >
+        {body}
+        {epubStrip && (
+          <>
+            <div
+              aria-hidden="true"
+              title="上一页"
+              className="absolute inset-y-0 left-0 z-20 w-[22%] cursor-pointer"
+              onClick={navPrev}
+            />
+            {/* 右条内缩 10px 让出 iframe 原生滚动条（typoCss 已收窄为 8px），
+                滚动条保持可拖可点；左缘无滚动条不用让 */}
+            <div
+              aria-hidden="true"
+              title="下一页"
+              className="absolute inset-y-0 right-[10px] z-20 w-[22%] cursor-pointer"
+              onClick={navNext}
+            />
+          </>
+        )}
+      </div>
 
       {showDrift && (
         <div className="pointer-events-none fixed inset-x-0 top-4 z-40 flex justify-center">

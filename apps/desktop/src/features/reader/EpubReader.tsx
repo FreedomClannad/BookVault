@@ -6,13 +6,24 @@
  * 排版（颜色/字号/行高/字体）在 iframe load 后动态注入 body style，
  * 改偏好不重载 srcDoc、不丢滚动位置。
  * 进度模型：{ type: "chapter", chapterId(=zip href), progress(章内滚动比) }
+ * 滚动导航：对外暴露 ScrollPager（iframe 内按屏滚动，见 pager.ts）；iframe 会吞掉
+ * 父层的指针/键盘事件，点击翻页由 Reader 层的覆盖条实现（无法用容器事件判区）。
  *
  * 已知限制（docs/formats/）：外部 CSS/字体不加载（P1 升级 foliate-js 渲染引擎时解决）；
  * iframe 内的键盘事件不冒泡到父层，章节切换需用悬浮工具栏。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type Ref,
+} from "react";
 import { api, guessMime, toDataUrl, type ChapterDto, type ReadingLocation } from "../../app/api";
+import type { ScrollPager } from "./pager";
 import { FONT_SANS, FONT_SERIF, type ReadingPrefs } from "./readingPrefs";
 
 interface Props {
@@ -45,10 +56,15 @@ function resolveZipPath(baseDir: string, rel: string): string {
   return out.join("/");
 }
 
-/** 静态骨架：排版值一律由 applyTypo 动态注入，避免改偏好时重载文档 */
+/** 静态骨架：排版值一律由 applyTypo 动态注入，避免改偏好时重载文档。
+ * 滚动条样式对齐全局（app.css 的 8px 细滚动条）——iframe 是独立文档不继承全局样式，
+ * 默认粗滚动条会被右侧点击翻页覆盖条压住（覆盖条按 8px 宽度内缩让出滚动条）。 */
 const typoCss = `
 body { margin: 0 auto; padding: 32px 24px 96px; max-width: 40em; }
 img { max-width: 100%; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: rgb(128 128 128 / 0.45); border-radius: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
 `;
 
 function sanitizeHtml(html: string): string {
@@ -87,7 +103,8 @@ export function EpubReader({
   onProgress,
   onActivity,
   jump,
-}: Props) {
+  ref,
+}: Props & { ref?: Ref<ScrollPager> }) {
   const init = initial?.type === "chapter" ? initial : null;
   const [doc, setDoc] = useState<string>("");
   const frameRef = useRef<HTMLIFrameElement>(null);
@@ -96,6 +113,31 @@ export function EpubReader({
   const restoredRef = useRef(false);
   /** 查找跳转意图按 seq 只消费一次：切章重载 srcDoc 时旧意图不再触发 */
   const jumpSeqConsumed = useRef(-1);
+  /** 当前 iframe 文档所属章节：跳转意图必须等「新章节的文档」load 完成再消费 */
+  const docChapterRef = useRef<string | null>(null);
+  const jumpRef = useRef(jump);
+  jumpRef.current = jump;
+
+  // 滚动翻页原语（Reader 层据此「先按屏推进、到边界才跨章」，见 pager.ts）；
+  // 文档未就绪时吞掉翻页，避免把加载中的章节误判为章末而跳章
+  useImperativeHandle(ref, () => ({
+    pageDown: () => {
+      const win = frameRef.current?.contentWindow;
+      if (!win || !doc || docChapterRef.current !== chapterRef.current) return true;
+      const d2 = win.document.documentElement;
+      const max = d2.scrollHeight - win.innerHeight;
+      if (win.scrollY >= max - 1) return false;
+      win.scrollTo({ top: Math.min(max, win.scrollY + win.innerHeight), behavior: "smooth" });
+      return true;
+    },
+    pageUp: () => {
+      const win = frameRef.current?.contentWindow;
+      if (!win || !doc || docChapterRef.current !== chapterRef.current) return true;
+      if (win.scrollY <= 1) return false;
+      win.scrollTo({ top: Math.max(0, win.scrollY - win.innerHeight), behavior: "smooth" });
+      return true;
+    },
+  }));
 
   const chapter = useMemo(() => chapters.find((c) => c.id === chapterId), [chapters, chapterId]);
 
@@ -111,7 +153,9 @@ export function EpubReader({
         html = await inlineImages(html, href, fileId);
         if (cancelled) return;
         setDoc(
-          `<!doctype html><html><head><meta charset="utf-8"><style>${typoCss}</style></head><body>${html}</body></html>`,
+          // 文末注入章节标记：相邻两章内容完全相同（空章节等）时 srcDoc 字符串也必须
+          // 不同，否则 React 判定无变化、iframe 不重载，load/docChapterRef 全部失联
+          `<!doctype html><html><head><meta charset="utf-8"><style>${typoCss}</style></head><body>${html}<!--bv-chapter:${href}--></body></html>`,
         );
       })
       .catch(() => {
@@ -137,21 +181,29 @@ export function EpubReader({
     applyTypo();
   }, [applyTypo, doc]);
 
-  // 查找跳转：正文就绪后滚到等比例位置并上报进度
-  useEffect(() => {
-    if (!jump || !doc) return;
-    if (jump.seq === jumpSeqConsumed.current) return;
-    jumpSeqConsumed.current = jump.seq;
+  // 查找/回退跳转：统一走 consumeJump——
+  // - 文档已就绪（章内跳转）：effect 立即消费；
+  // - 刚切章：新 srcDoc 的 load 完成前滚动会被重置，onLoad 里再消费。
+  // docChapterRef 守卫保证意图不会被「切换瞬间的旧文档」吞掉。
+  const consumeJump = useCallback(() => {
+    const j = jumpRef.current;
+    if (!j || j.seq === jumpSeqConsumed.current) return;
+    if (docChapterRef.current !== chapterRef.current) return;
     const win = frameRef.current?.contentWindow;
     if (!win) return;
+    jumpSeqConsumed.current = j.seq;
     const d2 = win.document.documentElement;
-    win.scrollTo(0, jump.ratio * Math.max(0, d2.scrollHeight - win.innerHeight));
+    win.scrollTo(0, j.ratio * Math.max(0, d2.scrollHeight - win.innerHeight));
     onProgress({
       type: "chapter",
       chapterId: chapterRef.current,
-      progress: Math.min(1, Math.max(0, jump.ratio)),
+      progress: Math.min(1, Math.max(0, j.ratio)),
     });
-  }, [jump, doc, onProgress]);
+  }, [onProgress]);
+
+  useEffect(() => {
+    consumeJump();
+  }, [jump, doc, consumeJump]);
 
   // iframe 内滚动进度 + 恢复位置
   useEffect(() => {
@@ -160,6 +212,7 @@ export function EpubReader({
     const onLoad = () => {
       const win = frame.contentWindow;
       if (!win) return;
+      docChapterRef.current = chapterRef.current;
       applyTypo();
       const handler = () => {
         const doc2 = win.document.documentElement;
@@ -172,6 +225,7 @@ export function EpubReader({
       };
       win.addEventListener("scroll", handler, { passive: true });
       win.addEventListener("mousemove", onActivity, { passive: true });
+      consumeJump();
       if (!restoredRef.current && init && init.chapterId === chapterRef.current) {
         const doc2 = win.document.documentElement;
         win.scrollTo(0, init.progress * Math.max(0, doc2.scrollHeight - win.innerHeight));
@@ -180,7 +234,7 @@ export function EpubReader({
     };
     frame.addEventListener("load", onLoad);
     return () => frame.removeEventListener("load", onLoad);
-  }, [doc, init, onProgress, applyTypo, onActivity]);
+  }, [doc, init, onProgress, applyTypo, onActivity, consumeJump]);
 
   return (
     <div className="min-h-0 flex-1" style={{ background: prefs.theme.bg }}>
